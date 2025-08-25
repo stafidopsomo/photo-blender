@@ -2,8 +2,10 @@
   "name": "photo-roulette",
   "version": "1.0.0",
   "scripts": {
-    "build": "cd frontend && npm install && npm run build",
+    "heroku-prebuild": "npm install --prefix ./frontend",
+    "build": "npm run build --prefix ./frontend",
     "start": "cd backend && npm install && NODE_ENV=production npm start",
+    "postbuild": "npm install --prefix ./backend",
     "dev:backend": "cd backend && npm run dev",
     "dev:frontend": "cd frontend && npm start"
   },
