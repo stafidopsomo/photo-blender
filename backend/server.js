@@ -7,7 +7,15 @@ const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const sharp = require('sharp');
+const cloudinary = require('cloudinary').v2;
 require('dotenv').config();
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'demo',
+  api_key: process.env.CLOUDINARY_API_KEY || 'demo',
+  api_secret: process.env.CLOUDINARY_API_SECRET || 'demo'
+});
 
 const app = express();
 const server = http.createServer(app);
@@ -215,46 +223,69 @@ app.post('/api/join-room', (req, res) => {
 app.post('/api/upload-photo', upload.single('photo'), async (req, res) => {
   try {
     const { roomCode, playerId } = req.body;
-    
+
     if (!req.file) {
       return res.status(400).json({ error: 'No photo uploaded' });
     }
-    
+
     const gameRoom = gameRooms.get(roomCode?.toUpperCase());
     if (!gameRoom) {
       return res.status(404).json({ error: 'Room not found' });
     }
-    
+
     const player = gameRoom.players.get(playerId);
     if (!player) {
       return res.status(404).json({ error: 'Player not found in room' });
     }
-    
+
     // Compress and resize image
     const compressedPath = path.join(uploadsDir, 'compressed-' + req.file.filename);
     await sharp(req.file.path)
       .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality: 80 })
       .toFile(compressedPath);
-    
+
     // Remove original file
     fs.unlinkSync(req.file.path);
-    
-    // Add photo to game room
-    gameRoom.addPhoto(playerId, compressedPath);
-    
+
+    // Upload to Cloudinary
+    let photoUrl = `/uploads/${path.basename(compressedPath)}`;
+
+    if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_CLOUD_NAME !== 'demo') {
+      try {
+        const result = await cloudinary.uploader.upload(compressedPath, {
+          folder: 'photo-roulette',
+          resource_type: 'image',
+          transformation: [
+            { width: 800, height: 800, crop: 'limit' },
+            { quality: 'auto:good' }
+          ]
+        });
+        photoUrl = result.secure_url;
+
+        // Remove local file after upload to cloudinary
+        fs.unlinkSync(compressedPath);
+      } catch (cloudError) {
+        console.error('Cloudinary upload failed, using local storage:', cloudError);
+        // Fall back to local storage if cloudinary fails
+      }
+    }
+
+    // Add photo to game room with URL
+    gameRoom.addPhoto(playerId, photoUrl);
+
     // Notify room about photo upload
     io.to(roomCode.toUpperCase()).emit('photoUploaded', {
       playerName: player.name,
       totalPhotos: gameRoom.photos.length,
       canStartGame: gameRoom.canStartGame()
     });
-    
-    res.json({ 
+
+    res.json({
       message: 'Photo uploaded successfully',
       totalPhotos: gameRoom.photos.length
     });
-    
+
   } catch (error) {
     console.error('Upload error:', error);
     res.status(500).json({ error: 'Failed to upload photo' });
@@ -323,7 +354,7 @@ function showNextPhoto(gameRoom) {
   
   // Send photo to all players
   io.to(gameRoom.roomCode).emit('newPhoto', {
-    photoUrl: `/uploads/${path.basename(currentPhoto.path)}`,
+    photoUrl: currentPhoto.path, // Now stores full URL (either local or Cloudinary)
     photoIndex: gameRoom.currentPhotoIndex + 1,
     totalPhotos: gameRoom.photos.length,
     players: Array.from(gameRoom.players.values()).map(p => ({

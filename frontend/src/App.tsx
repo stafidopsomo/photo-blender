@@ -192,10 +192,12 @@ function App() {
     }
   };
 
-  const uploadPhoto = async (file: File) => {
+  const uploadPhoto = async (file: File, skipLoadingState = false) => {
     if (!file) return;
 
-    setLoading(true);
+    if (!skipLoadingState) {
+      setLoading(true);
+    }
     setError('');
 
     try {
@@ -211,12 +213,18 @@ function App() {
       });
 
       setUploadedPhotos(prev => [...prev, URL.createObjectURL(file)]);
-      setSuccess('Photo uploaded successfully!');
-      setTimeout(() => setSuccess(''), 3000);
+
+      if (!skipLoadingState) {
+        setSuccess('Photo uploaded successfully!');
+        setTimeout(() => setSuccess(''), 3000);
+      }
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to upload photo');
+      throw err; // Re-throw to handle in caller
     } finally {
-      setLoading(false);
+      if (!skipLoadingState) {
+        setLoading(false);
+      }
     }
   };
 
@@ -271,13 +279,27 @@ function App() {
     const filesToUpload = Array.from(files).slice(0, 5);
 
     setLoading(true);
+    setError('');
+
+    let successCount = 0;
     for (const file of filesToUpload) {
-      await uploadPhoto(file);
+      try {
+        await uploadPhoto(file, true); // Skip individual loading states
+        successCount++;
+      } catch (err) {
+        console.error('Failed to upload file:', file.name, err);
+      }
     }
+
     setLoading(false);
 
-    setSuccess(`${filesToUpload.length} photos uploaded successfully!`);
-    setTimeout(() => setSuccess(''), 3000);
+    if (successCount > 0) {
+      setSuccess(`${successCount} photo${successCount > 1 ? 's' : ''} uploaded successfully!`);
+      setTimeout(() => setSuccess(''), 3000);
+    }
+
+    // Reset the file input
+    event.target.value = '';
   };
 
   const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
@@ -472,9 +494,9 @@ function App() {
               <h3>Photo {currentPhoto.photoIndex} of {currentPhoto.totalPhotos}</h3>
             </div>
 
-            <img 
-              src={`${API_BASE}${currentPhoto.photoUrl}`}
-              alt="Game photo"
+            <img
+              src={currentPhoto.photoUrl.startsWith('http') ? currentPhoto.photoUrl : `${API_BASE}${currentPhoto.photoUrl}`}
+              alt="Guess whose photo"
               className="game-photo"
             />
 
