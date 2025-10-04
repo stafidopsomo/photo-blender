@@ -82,6 +82,8 @@ class GameRoom {
     this.gameState = 'waiting'; // waiting, uploading, playing, finished
     this.currentRound = 0;
     this.scores = new Map();
+    this.roundTimer = null;
+    this.resultsTimer = null;
     this.gameSettings = {
       maxPlayers: 8,
       roundTime: 30, // seconds
@@ -155,10 +157,10 @@ class GameRoom {
 
   getLeaderboard() {
     return Array.from(this.players.values())
-      .sort((a, b) => b.score - a.score)
+      .sort((a, b) => (b.score || 0) - (a.score || 0))
       .map(player => ({
         name: player.name,
-        score: player.score
+        score: player.score || 0
       }));
   }
 
@@ -329,16 +331,63 @@ app.post('/api/start-game', (req, res) => {
 // Submit guess
 app.post('/api/submit-guess', (req, res) => {
   const { roomCode, playerId, guessedPlayerId } = req.body;
-  
+
   const gameRoom = gameRooms.get(roomCode?.toUpperCase());
   if (!gameRoom) {
     return res.status(404).json({ error: 'Room not found' });
   }
-  
+
   gameRoom.submitGuess(playerId, guessedPlayerId);
-  
+
+  // Check if all players have submitted
+  const currentPhoto = gameRoom.getCurrentPhoto();
+  const totalPlayers = gameRoom.players.size;
+  const submittedGuesses = currentPhoto.guesses.size;
+
+  if (submittedGuesses === totalPlayers) {
+    // All players submitted, show results immediately
+    if (gameRoom.roundTimer) {
+      clearTimeout(gameRoom.roundTimer);
+      gameRoom.roundTimer = null;
+    }
+    showPhotoResults(gameRoom);
+  }
+
   res.json({ message: 'Guess submitted' });
 });
+
+// Helper function to show photo results
+function showPhotoResults(gameRoom) {
+  const currentPhoto = gameRoom.getCurrentPhoto();
+  const correctPlayer = gameRoom.players.get(currentPhoto.playerId);
+
+  io.to(gameRoom.roomCode).emit('photoResults', {
+    correctPlayer: correctPlayer ? correctPlayer.name : 'Unknown',
+    correctPlayerId: currentPhoto.playerId,
+    guesses: Array.from(currentPhoto.guesses.entries()).map(([playerId, guessedPlayerId]) => {
+      const guesser = gameRoom.players.get(playerId);
+      const guessed = gameRoom.players.get(guessedPlayerId);
+      return {
+        guesser: guesser ? guesser.name : 'Unknown',
+        guessed: guessed ? guessed.name : 'Unknown',
+        correct: guessedPlayerId === currentPhoto.playerId
+      };
+    }),
+    leaderboard: gameRoom.getLeaderboard()
+  });
+
+  // Move to next photo after showing results
+  gameRoom.resultsTimer = setTimeout(() => {
+    if (gameRoom.nextPhoto()) {
+      showNextPhoto(gameRoom);
+    } else {
+      gameRoom.gameState = 'finished';
+      io.to(gameRoom.roomCode).emit('gameFinished', {
+        leaderboard: gameRoom.getLeaderboard()
+      });
+    }
+  }, 5000); // Show results for 5 seconds
+}
 
 // Helper function to show next photo
 function showNextPhoto(gameRoom) {
@@ -351,7 +400,7 @@ function showNextPhoto(gameRoom) {
     });
     return;
   }
-  
+
   // Send photo to all players
   io.to(gameRoom.roomCode).emit('newPhoto', {
     photoUrl: currentPhoto.path, // Now stores full URL (either local or Cloudinary)
@@ -362,40 +411,10 @@ function showNextPhoto(gameRoom) {
       name: p.name
     }))
   });
-  
-  // Set timer for next photo
-  setTimeout(() => {
-    // Show answers
-    const currentPhoto = gameRoom.getCurrentPhoto();
-    const correctPlayer = gameRoom.players.get(currentPhoto.playerId);
-    
-    io.to(gameRoom.roomCode).emit('photoResults', {
-      correctPlayer: correctPlayer ? correctPlayer.name : 'Unknown',
-      correctPlayerId: currentPhoto.playerId,
-      guesses: Array.from(currentPhoto.guesses.entries()).map(([playerId, guessedPlayerId]) => {
-        const guesser = gameRoom.players.get(playerId);
-        const guessed = gameRoom.players.get(guessedPlayerId);
-        return {
-          guesser: guesser ? guesser.name : 'Unknown',
-          guessed: guessed ? guessed.name : 'Unknown',
-          correct: guessedPlayerId === currentPhoto.playerId
-        };
-      }),
-      leaderboard: gameRoom.getLeaderboard()
-    });
-    
-    // Move to next photo after showing results
-    setTimeout(() => {
-      if (gameRoom.nextPhoto()) {
-        showNextPhoto(gameRoom);
-      } else {
-        gameRoom.gameState = 'finished';
-        io.to(gameRoom.roomCode).emit('gameFinished', {
-          leaderboard: gameRoom.getLeaderboard()
-        });
-      }
-    }, 5000); // Show results for 5 seconds
-    
+
+  // Set timer for round - will be cleared if all players submit early
+  gameRoom.roundTimer = setTimeout(() => {
+    showPhotoResults(gameRoom);
   }, gameRoom.gameSettings.roundTime * 1000);
 }
 

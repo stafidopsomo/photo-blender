@@ -60,6 +60,8 @@ function App() {
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
   const [uploadedPhotos, setUploadedPhotos] = useState<string[]>([]);
+  const [timeRemaining, setTimeRemaining] = useState<number>(30);
+  const [hasSubmittedGuess, setHasSubmittedGuess] = useState(false);
 
   useEffect(() => {
     if (roomCode && playerId && playerName) {
@@ -107,6 +109,8 @@ function App() {
         setSelectedPlayer('');
         setPhotoResults(null);
         setCurrentView('game');
+        setTimeRemaining(30);
+        setHasSubmittedGuess(false);
       });
 
       newSocket.on('photoResults', (data: PhotoResults) => {
@@ -126,6 +130,17 @@ function App() {
       };
     }
   }, [roomCode, playerId, playerName]);
+
+  // Timer countdown effect
+  useEffect(() => {
+    if (currentPhoto && !photoResults && timeRemaining > 0) {
+      const timer = setInterval(() => {
+        setTimeRemaining(prev => prev > 0 ? prev - 1 : 0);
+      }, 1000);
+
+      return () => clearInterval(timer);
+    }
+  }, [currentPhoto, photoResults, timeRemaining]);
 
   const createRoom = async () => {
     if (!playerName.trim()) {
@@ -250,6 +265,10 @@ function App() {
       return;
     }
 
+    if (hasSubmittedGuess) {
+      return; // Already submitted
+    }
+
     try {
       await axios.post(`${API_BASE}/api/submit-guess`, {
         roomCode,
@@ -257,7 +276,8 @@ function App() {
         guessedPlayerId: selectedPlayer
       });
 
-      setSuccess('Guess submitted!');
+      setHasSubmittedGuess(true);
+      setSuccess('Guess submitted! Waiting for other players...');
       setTimeout(() => setSuccess(''), 2000);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to submit guess');
@@ -492,6 +512,14 @@ function App() {
           <div>
             <div style={{ textAlign: 'center', marginBottom: '20px' }}>
               <h3>Photo {currentPhoto.photoIndex} of {currentPhoto.totalPhotos}</h3>
+              <div style={{
+                fontSize: '24px',
+                fontWeight: 'bold',
+                color: timeRemaining <= 5 ? '#ff4444' : '#fff',
+                marginTop: '10px'
+              }}>
+                ⏱️ {timeRemaining}s
+              </div>
             </div>
 
             <img
@@ -518,13 +546,13 @@ function App() {
                   ))}
                 </div>
 
-                <button 
+                <button
                   className="button button-primary"
                   onClick={submitGuess}
-                  disabled={!selectedPlayer}
+                  disabled={!selectedPlayer || hasSubmittedGuess}
                   style={{ width: '100%', marginTop: '20px' }}
                 >
-                  Submit Guess
+                  {hasSubmittedGuess ? 'Submitted ✓' : 'Submit Guess'}
                 </button>
               </>
             )}
