@@ -91,13 +91,15 @@ class GameRoom {
     };
   }
 
-  addPlayer(playerId, playerName, socketId) {
+  addPlayer(playerId, playerName, socketId, isHost = false) {
     this.players.set(playerId, {
       id: playerId,
       name: playerName,
       socketId: socketId,
       photosUploaded: 0,
-      score: 0
+      score: 0,
+      streak: 0,
+      isHost: isHost
     });
     this.scores.set(playerId, 0);
   }
@@ -137,20 +139,47 @@ class GameRoom {
     return this.currentPhotoIndex < this.photos.length;
   }
 
-  submitGuess(playerId, guessedPlayerId) {
+  submitGuess(playerId, guessedPlayerId, timeToAnswer) {
     const currentPhoto = this.getCurrentPhoto();
     if (currentPhoto) {
-      currentPhoto.guesses.set(playerId, guessedPlayerId);
-      
+      currentPhoto.guesses.set(playerId, {
+        guessedPlayerId,
+        timeToAnswer,
+        timestamp: Date.now()
+      });
+
+      const player = this.players.get(playerId);
+      if (!player) return;
+
       // Award points if correct
       if (guessedPlayerId === currentPhoto.playerId) {
-        const currentScore = this.scores.get(playerId) || 0;
-        this.scores.set(playerId, currentScore + 100);
-        
-        const player = this.players.get(playerId);
-        if (player) {
-          player.score = currentScore + 100;
+        // Base points: 100
+        let points = 100;
+
+        // Time bonus: up to 100 points (faster = more points)
+        // 0-5s: +100, 5-15s: +50, 15-25s: +25, 25-30s: +10
+        if (timeToAnswer <= 5) {
+          points += 100;
+        } else if (timeToAnswer <= 15) {
+          points += 50;
+        } else if (timeToAnswer <= 25) {
+          points += 25;
+        } else {
+          points += 10;
         }
+
+        // Streak bonus
+        player.streak = (player.streak || 0) + 1;
+        if (player.streak >= 3) {
+          points += player.streak * 10; // +10 per streak level after 3
+        }
+
+        const currentScore = this.scores.get(playerId) || 0;
+        this.scores.set(playerId, currentScore + points);
+        player.score = currentScore + points;
+      } else {
+        // Wrong answer - reset streak
+        player.streak = 0;
       }
     }
   }
@@ -160,7 +189,8 @@ class GameRoom {
       .sort((a, b) => (b.score || 0) - (a.score || 0))
       .map(player => ({
         name: player.name,
-        score: player.score || 0
+        score: player.score || 0,
+        streak: player.streak || 0
       }));
   }
 
@@ -194,30 +224,32 @@ app.post('/api/create-room', (req, res) => {
 // Join a game room
 app.post('/api/join-room', (req, res) => {
   const { roomCode, playerName } = req.body;
-  
+
   if (!roomCode || !playerName) {
     return res.status(400).json({ error: 'Room code and player name are required' });
   }
-  
+
   const gameRoom = gameRooms.get(roomCode.toUpperCase());
   if (!gameRoom) {
     return res.status(404).json({ error: 'Room not found' });
   }
-  
+
   if (gameRoom.players.size >= gameRoom.gameSettings.maxPlayers) {
     return res.status(400).json({ error: 'Room is full' });
   }
-  
+
   if (gameRoom.gameState !== 'waiting') {
     return res.status(400).json({ error: 'Game already in progress' });
   }
-  
+
   const playerId = uuidv4();
-  
-  res.json({ 
+  const isHost = gameRoom.players.size === 0; // First player is host
+
+  res.json({
     playerId,
     roomCode: gameRoom.roomCode,
-    gameState: gameRoom.gameState
+    gameState: gameRoom.gameState,
+    isHost
   });
 });
 
@@ -330,14 +362,14 @@ app.post('/api/start-game', (req, res) => {
 
 // Submit guess
 app.post('/api/submit-guess', (req, res) => {
-  const { roomCode, playerId, guessedPlayerId } = req.body;
+  const { roomCode, playerId, guessedPlayerId, timeToAnswer } = req.body;
 
   const gameRoom = gameRooms.get(roomCode?.toUpperCase());
   if (!gameRoom) {
     return res.status(404).json({ error: 'Room not found' });
   }
 
-  gameRoom.submitGuess(playerId, guessedPlayerId);
+  gameRoom.submitGuess(playerId, guessedPlayerId, timeToAnswer || 30);
 
   // Check if all players have submitted
   const currentPhoto = gameRoom.getCurrentPhoto();
@@ -364,13 +396,15 @@ function showPhotoResults(gameRoom) {
   io.to(gameRoom.roomCode).emit('photoResults', {
     correctPlayer: correctPlayer ? correctPlayer.name : 'Unknown',
     correctPlayerId: currentPhoto.playerId,
-    guesses: Array.from(currentPhoto.guesses.entries()).map(([playerId, guessedPlayerId]) => {
+    guesses: Array.from(currentPhoto.guesses.entries()).map(([playerId, guessData]) => {
       const guesser = gameRoom.players.get(playerId);
-      const guessed = gameRoom.players.get(guessedPlayerId);
+      const guessed = gameRoom.players.get(guessData.guessedPlayerId);
+      const correct = guessData.guessedPlayerId === currentPhoto.playerId;
       return {
         guesser: guesser ? guesser.name : 'Unknown',
         guessed: guessed ? guessed.name : 'Unknown',
-        correct: guessedPlayerId === currentPhoto.playerId
+        correct,
+        timeToAnswer: guessData.timeToAnswer
       };
     }),
     leaderboard: gameRoom.getLeaderboard()
@@ -422,10 +456,10 @@ function showNextPhoto(gameRoom) {
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
   
-  socket.on('joinRoom', ({ roomCode, playerId, playerName }) => {
+  socket.on('joinRoom', ({ roomCode, playerId, playerName, isHost }) => {
     const gameRoom = gameRooms.get(roomCode?.toUpperCase());
     if (gameRoom) {
-      gameRoom.addPlayer(playerId, playerName, socket.id);
+      gameRoom.addPlayer(playerId, playerName, socket.id, isHost || false);
       playerSockets.set(socket.id, { playerId, roomCode: roomCode.toUpperCase() });
       
       socket.join(roomCode.toUpperCase());

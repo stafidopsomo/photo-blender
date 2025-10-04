@@ -32,10 +32,12 @@ interface PhotoResults {
     guesser: string;
     guessed: string;
     correct: boolean;
+    timeToAnswer?: number;
   }>;
   leaderboard: Array<{
     name: string;
     score: number;
+    streak?: number;
   }>;
 }
 
@@ -62,13 +64,16 @@ function App() {
   const [uploadedPhotos, setUploadedPhotos] = useState<string[]>([]);
   const [timeRemaining, setTimeRemaining] = useState<number>(30);
   const [hasSubmittedGuess, setHasSubmittedGuess] = useState(false);
+  const [isHost, setIsHost] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [photoStartTime, setPhotoStartTime] = useState<number>(0);
 
   useEffect(() => {
     if (roomCode && playerId && playerName) {
       const newSocket = io(API_BASE);
       setSocket(newSocket);
 
-      newSocket.emit('joinRoom', { roomCode, playerId, playerName });
+      newSocket.emit('joinRoom', { roomCode, playerId, playerName, isHost });
 
       newSocket.on('gameState', (state: GameState) => {
         setGameState(state);
@@ -111,6 +116,7 @@ function App() {
         setCurrentView('game');
         setTimeRemaining(30);
         setHasSubmittedGuess(false);
+        setPhotoStartTime(Date.now());
       });
 
       newSocket.on('photoResults', (data: PhotoResults) => {
@@ -162,6 +168,7 @@ function App() {
 
       setRoomCode(newRoomCode);
       setPlayerId(joinResponse.data.playerId);
+      setIsHost(joinResponse.data.isHost || true);
       setCurrentView('waiting');
 
       // Immediately prompt for 5 photos after creating room
@@ -193,6 +200,7 @@ function App() {
 
       setPlayerId(response.data.playerId);
       setRoomCode(response.data.roomCode);
+      setIsHost(response.data.isHost || false);
       setCurrentView('waiting');
 
       // Immediately prompt for 5 photos after joining
@@ -225,6 +233,12 @@ function App() {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
+        onUploadProgress: (progressEvent) => {
+          const percentCompleted = progressEvent.total
+            ? Math.round((progressEvent.loaded * 100) / progressEvent.total)
+            : 0;
+          setUploadProgress(percentCompleted);
+        }
       });
 
       setUploadedPhotos(prev => [...prev, URL.createObjectURL(file)]);
@@ -270,10 +284,13 @@ function App() {
     }
 
     try {
+      const timeToAnswer = 30 - timeRemaining;
+
       await axios.post(`${API_BASE}/api/submit-guess`, {
         roomCode,
         playerId,
-        guessedPlayerId: selectedPlayer
+        guessedPlayerId: selectedPlayer,
+        timeToAnswer
       });
 
       setHasSubmittedGuess(true);
@@ -300,21 +317,25 @@ function App() {
 
     setLoading(true);
     setError('');
+    setUploadProgress(0);
 
     let successCount = 0;
-    for (const file of filesToUpload) {
+    for (let i = 0; i < filesToUpload.length; i++) {
+      const file = filesToUpload[i];
       try {
         await uploadPhoto(file, true); // Skip individual loading states
         successCount++;
+        setUploadProgress(Math.round(((i + 1) / filesToUpload.length) * 100));
       } catch (err) {
         console.error('Failed to upload file:', file.name, err);
       }
     }
 
     setLoading(false);
+    setUploadProgress(0);
 
     if (successCount > 0) {
-      setSuccess(`${successCount} photo${successCount > 1 ? 's' : ''} uploaded successfully!`);
+      setSuccess(`${successCount} photo${successCount > 1 ? 's' : ''} uploaded successfully! 🎉`);
       setTimeout(() => setSuccess(''), 3000);
     }
 
@@ -475,9 +496,20 @@ function App() {
                 />
               </div>
 
-              {uploadedPhotos.length > 0 && (
+              {loading && uploadProgress > 0 && (
+                <div className="upload-progress">
+                  <div className="upload-progress-bar">
+                    <div className="upload-progress-fill" style={{ width: `${uploadProgress}%` }}></div>
+                  </div>
+                  <p style={{ textAlign: 'center', marginTop: '8px', fontSize: '0.9rem' }}>
+                    Uploading... {uploadProgress}%
+                  </p>
+                </div>
+              )}
+
+              {uploadedPhotos.length > 0 && !loading && (
                 <div style={{ marginTop: '15px' }}>
-                  <p>Uploaded: {uploadedPhotos.length} photos</p>
+                  <p>✅ Uploaded: {uploadedPhotos.length} photos</p>
                 </div>
               )}
             </div>
@@ -486,15 +518,21 @@ function App() {
               <p>Total photos: {gameState.totalPhotos}</p>
               <p>Need at least 2 players and 10 total photos to start</p>
 
-              {gameState.canStartGame && (
+              {isHost && gameState.canStartGame && (
                 <button
                   className="button button-primary"
                   onClick={startGame}
                   disabled={loading}
                   style={{ marginTop: '15px' }}
                 >
-                  {loading ? 'Starting...' : 'Start Game!'}
+                  {loading ? 'Starting...' : '🎮 Start Game!'}
                 </button>
+              )}
+
+              {!isHost && (
+                <p style={{ marginTop: '15px', opacity: 0.7, fontSize: '0.9rem' }}>
+                  Waiting for host to start the game...
+                </p>
               )}
             </div>
 
@@ -561,13 +599,20 @@ function App() {
               <div style={{ textAlign: 'center' }}>
                 <h3>Correct Answer: {photoResults.correctPlayer}</h3>
                 
-                <div className="leaderboard">
+                <div className="leaderboard results-container">
                   <h4>Current Scores</h4>
                   {photoResults.leaderboard.map((player, index) => (
                     <div key={index} className="leaderboard-item">
                       <span className="rank">#{index + 1}</span>
-                      <span>{player.name}</span>
-                      <span>{player.score} pts</span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {player.name}
+                        {player.streak && player.streak >= 3 && (
+                          <span className="streak-badge">
+                            🔥 {player.streak}
+                          </span>
+                        )}
+                      </span>
+                      <span style={{ fontWeight: '700' }}>{player.score} pts</span>
                     </div>
                   ))}
                 </div>
@@ -580,15 +625,22 @@ function App() {
           <div style={{ textAlign: 'center' }}>
             <h2>🎉 Game Finished!</h2>
             
-            <div className="leaderboard">
+            <div className="leaderboard results-container">
               <h3>Final Results</h3>
               {photoResults.leaderboard.map((player, index) => (
                 <div key={index} className="leaderboard-item">
                   <span className="rank">
                     {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `#${index + 1}`}
                   </span>
-                  <span>{player.name}</span>
-                  <span>{player.score} pts</span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {player.name}
+                    {player.streak && player.streak >= 3 && (
+                      <span className="streak-badge">
+                        🔥 {player.streak}
+                      </span>
+                    )}
+                  </span>
+                  <span style={{ fontWeight: '700' }}>{player.score} pts</span>
                 </div>
               ))}
             </div>
