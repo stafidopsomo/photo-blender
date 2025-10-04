@@ -84,6 +84,7 @@ class GameRoom {
     this.scores = new Map();
     this.roundTimer = null;
     this.resultsTimer = null;
+    this.hostId = null; // Track the host player ID
     this.gameSettings = {
       maxPlayers: 8,
       roundTime: 30, // seconds
@@ -92,6 +93,12 @@ class GameRoom {
   }
 
   addPlayer(playerId, playerName, socketId, isHost = false) {
+    // Set host if this is the first player
+    if (this.players.size === 0) {
+      this.hostId = playerId;
+      isHost = true;
+    }
+
     this.players.set(playerId, {
       id: playerId,
       name: playerName,
@@ -99,7 +106,7 @@ class GameRoom {
       photosUploaded: 0,
       score: 0,
       streak: 0,
-      isHost: isHost
+      isHost: playerId === this.hostId
     });
     this.scores.set(playerId, 0);
   }
@@ -243,7 +250,14 @@ app.post('/api/join-room', (req, res) => {
   }
 
   const playerId = uuidv4();
-  const isHost = gameRoom.players.size === 0; // First player is host
+
+  // Check if this will be the first player (host) BEFORE they're added
+  const isHost = gameRoom.players.size === 0 || !gameRoom.hostId;
+
+  // Set as host if no host exists yet
+  if (isHost) {
+    gameRoom.hostId = playerId;
+  }
 
   res.json({
     playerId,
@@ -329,12 +343,17 @@ app.post('/api/upload-photo', upload.single('photo'), async (req, res) => {
 // Start game
 app.post('/api/start-game', (req, res) => {
   const { roomCode, playerId } = req.body;
-  
+
   const gameRoom = gameRooms.get(roomCode?.toUpperCase());
   if (!gameRoom) {
     return res.status(404).json({ error: 'Room not found' });
   }
-  
+
+  // Check if the player is the host
+  if (playerId !== gameRoom.hostId) {
+    return res.status(403).json({ error: 'Only the host can start the game' });
+  }
+
   if (!gameRoom.canStartGame()) {
     return res.status(400).json({ error: 'Cannot start game yet. Need at least 2 players and 10 total photos.' });
   }
@@ -476,10 +495,12 @@ io.on('connection', (socket) => {
         players: Array.from(gameRoom.players.values()).map(p => ({
           id: p.id,
           name: p.name,
-          photosUploaded: p.photosUploaded
+          photosUploaded: p.photosUploaded,
+          isHost: p.isHost
         })),
         totalPhotos: gameRoom.photos.length,
-        canStartGame: gameRoom.canStartGame()
+        canStartGame: gameRoom.canStartGame(),
+        hostId: gameRoom.hostId
       });
     }
   });

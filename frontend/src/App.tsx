@@ -9,6 +9,7 @@ interface Player {
   name: string;
   photosUploaded?: number;
   score?: number;
+  isHost?: boolean;
 }
 
 interface GameState {
@@ -469,7 +470,10 @@ function App() {
               <h3>Players ({gameState.players.length})</h3>
               {gameState.players.map((player) => (
                 <div key={player.id} className="player-item">
-                  <span>{player.name}</span>
+                  <span>
+                    {player.name}
+                    {player.isHost && <span className="host-badge">👑 Host</span>}
+                  </span>
                   <span>{player.photosUploaded || 0} photos</span>
                 </div>
               ))}
