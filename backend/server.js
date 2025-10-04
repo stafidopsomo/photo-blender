@@ -157,7 +157,7 @@ class GameRoom {
   canStartGame() {
     const playersWithPhotos = Array.from(this.players.values())
       .filter(player => player.photosUploaded > 0);
-    return playersWithPhotos.length >= 2 && this.photos.length >= 5;
+    return playersWithPhotos.length >= 2 && this.photos.length >= 10;
   }
 }
 
@@ -271,7 +271,7 @@ app.post('/api/start-game', (req, res) => {
   }
   
   if (!gameRoom.canStartGame()) {
-    return res.status(400).json({ error: 'Cannot start game yet. Need at least 2 players with photos.' });
+    return res.status(400).json({ error: 'Cannot start game yet. Need at least 2 players and 10 total photos.' });
   }
   
   gameRoom.gameState = 'playing';

@@ -139,7 +139,7 @@ function App() {
     try {
       const response = await axios.post(`${API_BASE}/api/create-room`);
       const newRoomCode = response.data.roomCode;
-      
+
       const joinResponse = await axios.post(`${API_BASE}/api/join-room`, {
         roomCode: newRoomCode,
         playerName: playerName.trim()
@@ -148,6 +148,12 @@ function App() {
       setRoomCode(newRoomCode);
       setPlayerId(joinResponse.data.playerId);
       setCurrentView('waiting');
+
+      // Immediately prompt for 5 photos after creating room
+      setTimeout(() => {
+        setSuccess('Please select 5 random photos from your gallery');
+        document.getElementById('photo-input-multiple')?.click();
+      }, 500);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to create room');
     } finally {
@@ -173,6 +179,12 @@ function App() {
       setPlayerId(response.data.playerId);
       setRoomCode(response.data.roomCode);
       setCurrentView('waiting');
+
+      // Immediately prompt for 5 photos after joining
+      setTimeout(() => {
+        setSuccess('Please select 5 random photos from your gallery');
+        document.getElementById('photo-input-multiple')?.click();
+      }, 500);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to join room');
     } finally {
@@ -249,6 +261,23 @@ function App() {
     if (file) {
       uploadPhoto(file);
     }
+  };
+
+  const handleMultipleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    // Take up to 5 files
+    const filesToUpload = Array.from(files).slice(0, 5);
+
+    setLoading(true);
+    for (const file of filesToUpload) {
+      await uploadPhoto(file);
+    }
+    setLoading(false);
+
+    setSuccess(`${filesToUpload.length} photos uploaded successfully!`);
+    setTimeout(() => setSuccess(''), 3000);
   };
 
   const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
@@ -385,20 +414,20 @@ function App() {
 
             <div className="photo-upload">
               <h3>Upload Photos</h3>
-              <p>Upload photos for the game (at least 1 per player)</p>
-              
+              <p>Each player should upload 5 random photos from their gallery</p>
+
               <div
                 onDrop={handleDrop}
                 onDragOver={handleDragOver}
-                onClick={() => document.getElementById('photo-input')?.click()}
+                onClick={() => document.getElementById('photo-input-multiple')?.click()}
                 style={{ cursor: 'pointer', padding: '20px', marginTop: '15px' }}
               >
-                <p>📷 Click or drag photos here</p>
+                <p>📷 Click to select 5 photos from your gallery</p>
                 <input
-                  id="photo-input"
+                  id="photo-input-multiple"
                   type="file"
                   accept="image/*"
-                  onChange={handleFileSelect}
+                  onChange={handleMultipleFileSelect}
                   className="hidden-input"
                   multiple
                 />
@@ -413,10 +442,10 @@ function App() {
 
             <div style={{ marginTop: '30px' }}>
               <p>Total photos: {gameState.totalPhotos}</p>
-              <p>Need at least 5 photos to start</p>
-              
+              <p>Need at least 2 players and 10 total photos to start</p>
+
               {gameState.canStartGame && (
-                <button 
+                <button
                   className="button button-primary"
                   onClick={startGame}
                   disabled={loading}
