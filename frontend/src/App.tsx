@@ -68,6 +68,7 @@ function App() {
   const [isHost, setIsHost] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [photoStartTime, setPhotoStartTime] = useState<number>(0);
+  const [uploadMode, setUploadMode] = useState<'manual' | 'auto'>('manual');
 
   useEffect(() => {
     if (roomCode && playerId && playerName) {
@@ -203,12 +204,6 @@ function App() {
       setRoomCode(response.data.roomCode);
       setIsHost(response.data.isHost || false);
       setCurrentView('waiting');
-
-      // Immediately prompt for 5 photos after joining
-      setTimeout(() => {
-        setSuccess('Please select 5 random photos from your gallery');
-        document.getElementById('photo-input-multiple')?.click();
-      }, 500);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to join room');
     } finally {
@@ -313,8 +308,19 @@ function App() {
     const files = event.target.files;
     if (!files || files.length === 0) return;
 
-    // Take up to 5 files
-    const filesToUpload = Array.from(files).slice(0, 5);
+    let filesToUpload: File[] = [];
+
+    if (uploadMode === 'auto') {
+      // RANDOM AUTO-PICK MODE: Randomly select 5 photos
+      const filesArray = Array.from(files);
+      const shuffled = filesArray.sort(() => 0.5 - Math.random());
+      filesToUpload = shuffled.slice(0, 5);
+      setSuccess('🎲 Randomly picked 5 photos from your selection!');
+      setTimeout(() => setSuccess(''), 2000);
+    } else {
+      // MANUAL MODE: Take first 5 files user selected
+      filesToUpload = Array.from(files).slice(0, 5);
+    }
 
     setLoading(true);
     setError('');
@@ -481,15 +487,49 @@ function App() {
 
             <div className="photo-upload">
               <h3>Upload Photos</h3>
-              <p>Each player should upload 5 random photos from their gallery</p>
+              <p>Each player should upload 5 photos from their gallery</p>
+
+              {/* Mode Toggle */}
+              <div style={{
+                display: 'flex',
+                gap: '10px',
+                marginTop: '20px',
+                marginBottom: '15px'
+              }}>
+                <button
+                  className={`button ${uploadMode === 'manual' ? 'button-primary' : 'button-secondary'}`}
+                  onClick={() => setUploadMode('manual')}
+                  style={{ flex: 1 }}
+                >
+                  📷 Manual Select
+                </button>
+                <button
+                  className={`button ${uploadMode === 'auto' ? 'button-primary' : 'button-secondary'}`}
+                  onClick={() => setUploadMode('auto')}
+                  style={{ flex: 1 }}
+                >
+                  🎲 Random Pick
+                </button>
+              </div>
 
               <div
                 onDrop={handleDrop}
                 onDragOver={handleDragOver}
                 onClick={() => document.getElementById('photo-input-multiple')?.click()}
-                style={{ cursor: 'pointer', padding: '20px', marginTop: '15px' }}
+                style={{
+                  cursor: 'pointer',
+                  padding: '20px',
+                  marginTop: '10px',
+                  border: '2px dashed #6c63ff',
+                  borderRadius: '8px',
+                  backgroundColor: 'rgba(108, 99, 255, 0.1)'
+                }}
               >
-                <p>📷 Click to select 5 photos from your gallery</p>
+                <p style={{ textAlign: 'center', margin: 0 }}>
+                  {uploadMode === 'manual'
+                    ? '📷 Click to manually select 5 photos'
+                    : '🎲 Click to let us randomly pick 5 photos from your gallery'}
+                </p>
                 <input
                   id="photo-input-multiple"
                   type="file"
