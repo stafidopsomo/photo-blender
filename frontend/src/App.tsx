@@ -70,6 +70,29 @@ function App() {
   const [photoStartTime, setPhotoStartTime] = useState<number>(0);
   const [uploadMode, setUploadMode] = useState<'manual' | 'auto'>('manual');
 
+  // Check for saved session on mount (reconnection)
+  useEffect(() => {
+    const savedSession = localStorage.getItem('photoRouletteSession');
+    if (savedSession) {
+      try {
+        const session = JSON.parse(savedSession);
+        // Auto-fill the form with saved data
+        setPlayerName(session.playerName || '');
+        setRoomCode(session.roomCode || '');
+        setPlayerId(session.playerId || '');
+        setIsHost(session.isHost || false);
+
+        // Show a reconnect prompt
+        if (session.roomCode && session.playerId && session.playerName) {
+          setSuccess(`Found previous session in room ${session.roomCode}. Rejoin?`);
+        }
+      } catch (e) {
+        // Invalid session data, clear it
+        localStorage.removeItem('photoRouletteSession');
+      }
+    }
+  }, []);
+
   useEffect(() => {
     if (roomCode && playerId && playerName) {
       const newSocket = io(API_BASE);
@@ -173,11 +196,13 @@ function App() {
       setIsHost(joinResponse.data.isHost || true);
       setCurrentView('waiting');
 
-      // Immediately prompt for 5 photos after creating room
-      setTimeout(() => {
-        setSuccess('Please select 5 random photos from your gallery');
-        document.getElementById('photo-input-multiple')?.click();
-      }, 500);
+      // Save session to localStorage for reconnection
+      localStorage.setItem('photoRouletteSession', JSON.stringify({
+        roomCode: newRoomCode,
+        playerId: joinResponse.data.playerId,
+        playerName: playerName.trim(),
+        isHost: true
+      }));
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to create room');
     } finally {
@@ -204,6 +229,14 @@ function App() {
       setRoomCode(response.data.roomCode);
       setIsHost(response.data.isHost || false);
       setCurrentView('waiting');
+
+      // Save session to localStorage for reconnection
+      localStorage.setItem('photoRouletteSession', JSON.stringify({
+        roomCode: response.data.roomCode,
+        playerId: response.data.playerId,
+        playerName: playerName.trim(),
+        isHost: response.data.isHost || false
+      }));
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to join room');
     } finally {
@@ -211,7 +244,7 @@ function App() {
     }
   };
 
-  const uploadPhoto = async (file: File, skipLoadingState = false) => {
+  const uploadPhoto = async (file: File, skipLoadingState = false, photoIndex = 0, totalPhotos = 1) => {
     if (!file) return;
 
     if (!skipLoadingState) {
@@ -230,10 +263,21 @@ function App() {
           'Content-Type': 'multipart/form-data',
         },
         onUploadProgress: (progressEvent) => {
-          const percentCompleted = progressEvent.total
-            ? Math.round((progressEvent.loaded * 100) / progressEvent.total)
-            : 0;
-          setUploadProgress(percentCompleted);
+          if (totalPhotos > 1) {
+            // Calculate total progress across all photos
+            const currentPhotoProgress = progressEvent.total
+              ? (progressEvent.loaded / progressEvent.total)
+              : 0;
+            const completedPhotos = photoIndex;
+            const totalProgress = ((completedPhotos + currentPhotoProgress) / totalPhotos) * 100;
+            setUploadProgress(Math.round(totalProgress));
+          } else {
+            // Single photo upload
+            const percentCompleted = progressEvent.total
+              ? Math.round((progressEvent.loaded * 100) / progressEvent.total)
+              : 0;
+            setUploadProgress(percentCompleted);
+          }
         }
       });
 
@@ -327,12 +371,14 @@ function App() {
     setUploadProgress(0);
 
     let successCount = 0;
-    for (let i = 0; i < filesToUpload.length; i++) {
+    const totalFiles = filesToUpload.length;
+
+    for (let i = 0; i < totalFiles; i++) {
       const file = filesToUpload[i];
       try {
-        await uploadPhoto(file, true); // Skip individual loading states
+        // Pass photoIndex and totalPhotos for accurate progress tracking
+        await uploadPhoto(file, true, i, totalFiles);
         successCount++;
-        setUploadProgress(Math.round(((i + 1) / filesToUpload.length) * 100));
       } catch (err) {
         console.error('Failed to upload file:', file.name, err);
       }
@@ -363,6 +409,9 @@ function App() {
   };
 
   const resetGame = () => {
+    // Clear session from localStorage
+    localStorage.removeItem('photoRouletteSession');
+
     setCurrentView('home');
     setRoomCode('');
     setPlayerId('');
@@ -385,6 +434,25 @@ function App() {
     }
   };
 
+  // Rejoin with saved session
+  const rejoinSession = () => {
+    const savedSession = localStorage.getItem('photoRouletteSession');
+    if (savedSession) {
+      try {
+        const session = JSON.parse(savedSession);
+        setPlayerName(session.playerName);
+        setRoomCode(session.roomCode);
+        setPlayerId(session.playerId);
+        setIsHost(session.isHost);
+        setCurrentView('waiting');
+        setSuccess('Reconnecting to room...');
+      } catch (e) {
+        setError('Failed to reconnect');
+        localStorage.removeItem('photoRouletteSession');
+      }
+    }
+  };
+
   return (
     <div className="app">
       <div className="container">
@@ -398,6 +466,22 @@ function App() {
 
         {currentView === 'home' && (
           <div>
+            {/* Show rejoin button if session exists */}
+            {localStorage.getItem('photoRouletteSession') && (
+              <div style={{ marginBottom: '20px', textAlign: 'center' }}>
+                <button
+                  className="button button-primary"
+                  onClick={rejoinSession}
+                  style={{ marginBottom: '10px' }}
+                >
+                  🔄 Rejoin Previous Game
+                </button>
+                <p style={{ fontSize: '0.85rem', opacity: 0.7 }}>
+                  or start a new game below
+                </p>
+              </div>
+            )}
+
             <div className="form">
               <div className="input-group">
                 <label className="label">Your Name</label>
@@ -411,17 +495,17 @@ function App() {
                 />
               </div>
             </div>
-            
+
             <div className="form">
-              <button 
+              <button
                 className="button button-primary"
                 onClick={createRoom}
                 disabled={loading || !playerName.trim()}
               >
                 {loading ? 'Creating...' : 'Create New Game'}
               </button>
-              
-              <button 
+
+              <button
                 className="button button-secondary"
                 onClick={() => setCurrentView('join')}
                 disabled={!playerName.trim()}

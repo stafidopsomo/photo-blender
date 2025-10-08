@@ -480,17 +480,17 @@ io.on('connection', (socket) => {
     if (gameRoom) {
       gameRoom.addPlayer(playerId, playerName, socket.id, isHost || false);
       playerSockets.set(socket.id, { playerId, roomCode: roomCode.toUpperCase() });
-      
+
       socket.join(roomCode.toUpperCase());
-      
+
       // Notify room about new player
       socket.to(roomCode.toUpperCase()).emit('playerJoined', {
         playerName,
         totalPlayers: gameRoom.players.size
       });
-      
-      // Send current game state to new player
-      socket.emit('gameState', {
+
+      // Prepare full game state
+      const fullGameState = {
         gameState: gameRoom.gameState,
         players: Array.from(gameRoom.players.values()).map(p => ({
           id: p.id,
@@ -501,7 +501,13 @@ io.on('connection', (socket) => {
         totalPhotos: gameRoom.photos.length,
         canStartGame: gameRoom.canStartGame(),
         hostId: gameRoom.hostId
-      });
+      };
+
+      // Send current game state to new player
+      socket.emit('gameState', fullGameState);
+
+      // Also broadcast updated state to all other players in the room
+      socket.to(roomCode.toUpperCase()).emit('gameState', fullGameState);
     }
   });
   
