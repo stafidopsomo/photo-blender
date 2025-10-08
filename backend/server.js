@@ -163,17 +163,8 @@ class GameRoom {
         // Base points: 100
         let points = 100;
 
-        // Time bonus: up to 100 points (faster = more points)
-        // 0-5s: +100, 5-15s: +50, 15-25s: +25, 25-30s: +10
-        if (timeToAnswer <= 5) {
-          points += 100;
-        } else if (timeToAnswer <= 15) {
-          points += 50;
-        } else if (timeToAnswer <= 25) {
-          points += 25;
-        } else {
-          points += 10;
-        }
+        // Note: Time bonuses will be calculated AFTER all players submit
+        // in the showPhotoResults function, so we can rank the top 3 fastest
 
         // Streak bonus
         player.streak = (player.streak || 0) + 1;
@@ -187,6 +178,35 @@ class GameRoom {
       } else {
         // Wrong answer - reset streak
         player.streak = 0;
+      }
+    }
+  }
+
+  // Calculate and award time bonuses to top 3 fastest correct answers
+  awardTimeBonuses() {
+    const currentPhoto = this.getCurrentPhoto();
+    if (!currentPhoto) return;
+
+    // Get all correct guesses with their times
+    const correctGuesses = Array.from(currentPhoto.guesses.entries())
+      .filter(([playerId, guess]) => guess.guessedPlayerId === currentPhoto.playerId)
+      .map(([playerId, guess]) => ({
+        playerId,
+        timeToAnswer: guess.timeToAnswer
+      }))
+      .sort((a, b) => a.timeToAnswer - b.timeToAnswer); // Sort by speed (fastest first)
+
+    // Award bonuses to top 3 fastest
+    const bonuses = [50, 30, 10]; // 1st: +50, 2nd: +30, 3rd: +10
+
+    for (let i = 0; i < Math.min(3, correctGuesses.length); i++) {
+      const { playerId } = correctGuesses[i];
+      const player = this.players.get(playerId);
+      if (player) {
+        const bonus = bonuses[i];
+        const currentScore = this.scores.get(playerId) || 0;
+        this.scores.set(playerId, currentScore + bonus);
+        player.score = currentScore + bonus;
       }
     }
   }
@@ -329,6 +349,21 @@ app.post('/api/upload-photo', upload.single('photo'), async (req, res) => {
       canStartGame: gameRoom.canStartGame()
     });
 
+    // Broadcast updated game state to all players so they see photo counts
+    const fullGameState = {
+      gameState: gameRoom.gameState,
+      players: Array.from(gameRoom.players.values()).map(p => ({
+        id: p.id,
+        name: p.name,
+        photosUploaded: p.photosUploaded,
+        isHost: p.isHost
+      })),
+      totalPhotos: gameRoom.photos.length,
+      canStartGame: gameRoom.canStartGame(),
+      hostId: gameRoom.hostId
+    };
+    io.to(roomCode.toUpperCase()).emit('gameState', fullGameState);
+
     res.json({
       message: 'Photo uploaded successfully',
       totalPhotos: gameRoom.photos.length
@@ -411,6 +446,9 @@ app.post('/api/submit-guess', (req, res) => {
 function showPhotoResults(gameRoom) {
   const currentPhoto = gameRoom.getCurrentPhoto();
   const correctPlayer = gameRoom.players.get(currentPhoto.playerId);
+
+  // Award time bonuses to top 3 fastest correct answers BEFORE showing results
+  gameRoom.awardTimeBonuses();
 
   io.to(gameRoom.roomCode).emit('photoResults', {
     correctPlayer: correctPlayer ? correctPlayer.name : 'Unknown',
