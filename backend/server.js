@@ -196,14 +196,17 @@ class GameRoom {
       }))
       .sort((a, b) => a.timeToAnswer - b.timeToAnswer); // Sort by speed (fastest first)
 
-    // Award bonuses to top 3 fastest
-    const bonuses = [50, 30, 10]; // 1st: +50, 2nd: +30, 3rd: +10
-
+    // Award bonuses to top 3 fastest based on their actual time
     for (let i = 0; i < Math.min(3, correctGuesses.length); i++) {
-      const { playerId } = correctGuesses[i];
+      const { playerId, timeToAnswer } = correctGuesses[i];
       const player = this.players.get(playerId);
       if (player) {
-        const bonus = bonuses[i];
+        // Time bonus based on speed (faster = more points)
+        // Max bonus: 100 points for instant answer (0s)
+        // Min bonus: 0 points for 30s answer
+        const maxTime = 30; // seconds
+        const bonus = Math.round(Math.max(0, (maxTime - timeToAnswer) / maxTime * 100));
+
         const currentScore = this.scores.get(playerId) || 0;
         this.scores.set(playerId, currentScore + bonus);
         player.score = currentScore + bonus;
