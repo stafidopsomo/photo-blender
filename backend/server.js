@@ -8,6 +8,9 @@ const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const sharp = require('sharp');
 const cloudinary = require('cloudinary').v2;
+const rateLimit = require('express-rate-limit');
+const { body, validationResult } = require('express-validator');
+const sanitizeHtml = require('sanitize-html');
 require('dotenv').config();
 
 // Configure Cloudinary
@@ -271,10 +274,59 @@ function getPlayerFromSocket(socketId) {
   return playerSockets.get(socketId);
 }
 
+// Sanitization function to prevent XSS attacks
+function sanitizePlayerName(name) {
+  if (!name || typeof name !== 'string') {
+    return '';
+  }
+
+  // Remove all HTML tags, only allow plain text
+  const sanitized = sanitizeHtml(name, {
+    allowedTags: [],
+    allowedAttributes: {}
+  });
+
+  // Trim whitespace and limit length
+  return sanitized.trim().substring(0, 20);
+}
+
+// Rate limiters for different endpoints
+const createRoomLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // 10 room creations per 15 minutes per IP
+  message: { error: 'Too many rooms created. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const uploadLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 10, // 10 uploads per minute
+  message: { error: 'Too many uploads. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const guessLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 100, // 100 guesses per minute (generous for active games)
+  message: { error: 'Too many guess attempts. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const generalLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 50, // 50 requests per minute
+  message: { error: 'Too many requests. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 // API Routes
 
 // Create a new game room
-app.post('/api/create-room', (req, res) => {
+app.post('/api/create-room', createRoomLimiter, (req, res) => {
   // Generate unique room code (check for collisions)
   let roomCode;
   let attempts = 0;
@@ -297,11 +349,22 @@ app.post('/api/create-room', (req, res) => {
 });
 
 // Join a game room
-app.post('/api/join-room', (req, res) => {
+app.post('/api/join-room', generalLimiter, (req, res) => {
   const { roomCode, playerName } = req.body;
 
   if (!roomCode || !playerName) {
     return res.status(400).json({ error: 'Room code and player name are required' });
+  }
+
+  // Sanitize player name to prevent XSS attacks
+  const sanitizedName = sanitizePlayerName(playerName);
+
+  if (!sanitizedName || sanitizedName.length === 0) {
+    return res.status(400).json({ error: 'Please enter a valid name (letters and numbers only)' });
+  }
+
+  if (sanitizedName.length < 2) {
+    return res.status(400).json({ error: 'Name must be at least 2 characters long' });
   }
 
   const gameRoom = gameRooms.get(roomCode.toUpperCase());
@@ -331,12 +394,13 @@ app.post('/api/join-room', (req, res) => {
     playerId,
     roomCode: gameRoom.roomCode,
     gameState: gameRoom.gameState,
-    isHost
+    isHost,
+    sanitizedName // Return sanitized name so frontend uses it
   });
 });
 
 // Upload photo
-app.post('/api/upload-photo', upload.single('photo'), async (req, res) => {
+app.post('/api/upload-photo', uploadLimiter, upload.single('photo'), async (req, res) => {
   try {
     const { roomCode, playerId } = req.body;
 
@@ -432,7 +496,7 @@ app.post('/api/upload-photo', upload.single('photo'), async (req, res) => {
 });
 
 // Start game
-app.post('/api/start-game', (req, res) => {
+app.post('/api/start-game', generalLimiter, (req, res) => {
   const { roomCode, playerId } = req.body;
 
   const gameRoom = gameRooms.get(roomCode?.toUpperCase());
@@ -471,7 +535,7 @@ app.post('/api/start-game', (req, res) => {
 });
 
 // Submit guess
-app.post('/api/submit-guess', (req, res) => {
+app.post('/api/submit-guess', guessLimiter, (req, res) => {
   const { roomCode, playerId, guessedPlayerId, timeToAnswer } = req.body;
 
   const gameRoom = gameRooms.get(roomCode?.toUpperCase());
@@ -499,7 +563,7 @@ app.post('/api/submit-guess', (req, res) => {
 });
 
 // Reset game (Play Again)
-app.post('/api/reset-game', (req, res) => {
+app.post('/api/reset-game', generalLimiter, (req, res) => {
   const { roomCode, playerId } = req.body;
 
   const gameRoom = gameRooms.get(roomCode?.toUpperCase());
@@ -664,10 +728,18 @@ io.on('connection', (socket) => {
   socket.on('joinRoom', ({ roomCode, playerId, playerName, isHost }) => {
     const gameRoom = gameRooms.get(roomCode?.toUpperCase());
     if (gameRoom) {
+      // Sanitize player name to prevent XSS
+      const sanitizedName = sanitizePlayerName(playerName);
+
+      if (!sanitizedName || sanitizedName.length < 2) {
+        socket.emit('error', { message: 'Invalid player name' });
+        return;
+      }
+
       // Check if this player already exists (reconnection)
       const isReconnection = gameRoom.players.has(playerId);
 
-      gameRoom.addPlayer(playerId, playerName, socket.id, isHost || false);
+      gameRoom.addPlayer(playerId, sanitizedName, socket.id, isHost || false);
       playerSockets.set(socket.id, { playerId, roomCode: roomCode.toUpperCase() });
 
       socket.join(roomCode.toUpperCase());

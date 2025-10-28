@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import io, { Socket } from 'socket.io-client';
 import axios from 'axios';
+import DOMPurify from 'dompurify';
 import './index.css';
 
 // Types
@@ -44,6 +45,14 @@ interface PhotoResults {
 
 const API_BASE = process.env.NODE_ENV === 'production' ? process.env.REACT_APP_API_URL || window.location.origin : 'http://localhost:5000';
 
+// Sanitization helper to prevent XSS attacks when displaying user input
+const sanitizeText = (text: string): string => {
+  return DOMPurify.sanitize(text, {
+    ALLOWED_TAGS: [], // No HTML tags allowed
+    ALLOWED_ATTR: [] // No attributes allowed
+  });
+};
+
 function App() {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [currentView, setCurrentView] = useState<'home' | 'join' | 'create' | 'waiting' | 'uploading' | 'game' | 'results'>('home');
@@ -81,7 +90,7 @@ function App() {
       setRoomCode(urlRoomCode);
 
       // Check for saved session
-      const savedSession = localStorage.getItem('photoRouletteSession');
+      const savedSession = localStorage.getItem('photoBlenderSession');
       if (savedSession) {
         try {
           const session = JSON.parse(savedSession);
@@ -94,7 +103,7 @@ function App() {
             return;
           }
         } catch (e) {
-          localStorage.removeItem('photoRouletteSession');
+          localStorage.removeItem('photoBlenderSession');
         }
       }
 
@@ -102,7 +111,7 @@ function App() {
       setCurrentView('join');
     } else {
       // No room code in URL - check for saved session
-      const savedSession = localStorage.getItem('photoRouletteSession');
+      const savedSession = localStorage.getItem('photoBlenderSession');
       if (savedSession) {
         try {
           const session = JSON.parse(savedSession);
@@ -115,7 +124,7 @@ function App() {
             setSuccess(`Found previous session in room ${session.roomCode}. Rejoin?`);
           }
         } catch (e) {
-          localStorage.removeItem('photoRouletteSession');
+          localStorage.removeItem('photoBlenderSession');
         }
       }
     }
@@ -248,16 +257,23 @@ function App() {
       setRoomCode(newRoomCode);
       setPlayerId(joinResponse.data.playerId);
       setIsHost(joinResponse.data.isHost || true);
+
+      // Use sanitized name from backend if provided
+      const finalPlayerName = joinResponse.data.sanitizedName || playerName.trim();
+      if (joinResponse.data.sanitizedName) {
+        setPlayerName(joinResponse.data.sanitizedName);
+      }
+
       setCurrentView('waiting');
 
       // Update URL with room code
       window.history.pushState({}, '', `/${newRoomCode}`);
 
       // Save session to localStorage for reconnection
-      localStorage.setItem('photoRouletteSession', JSON.stringify({
+      localStorage.setItem('photoBlenderSession', JSON.stringify({
         roomCode: newRoomCode,
         playerId: joinResponse.data.playerId,
-        playerName: playerName.trim(),
+        playerName: finalPlayerName,
         isHost: true
       }));
     } catch (err: any) {
@@ -285,16 +301,23 @@ function App() {
       setPlayerId(response.data.playerId);
       setRoomCode(response.data.roomCode);
       setIsHost(response.data.isHost || false);
+
+      // Use sanitized name from backend if provided
+      if (response.data.sanitizedName) {
+        setPlayerName(response.data.sanitizedName);
+      }
+
       setCurrentView('waiting');
 
       // Update URL with room code
       window.history.pushState({}, '', `/${response.data.roomCode}`);
 
       // Save session to localStorage for reconnection
-      localStorage.setItem('photoRouletteSession', JSON.stringify({
+      const finalPlayerName = response.data.sanitizedName || playerName.trim();
+      localStorage.setItem('photoBlenderSession', JSON.stringify({
         roomCode: response.data.roomCode,
         playerId: response.data.playerId,
-        playerName: playerName.trim(),
+        playerName: finalPlayerName,
         isHost: response.data.isHost || false
       }));
     } catch (err: any) {
@@ -473,7 +496,7 @@ function App() {
 
   const resetGame = () => {
     // Clear session from localStorage
-    localStorage.removeItem('photoRouletteSession');
+    localStorage.removeItem('photoBlenderSession');
 
     // Clear URL
     window.history.pushState({}, '', '/');
@@ -527,7 +550,7 @@ function App() {
 
   // Rejoin with saved session
   const rejoinSession = () => {
-    const savedSession = localStorage.getItem('photoRouletteSession');
+    const savedSession = localStorage.getItem('photoBlenderSession');
     if (savedSession) {
       try {
         const session = JSON.parse(savedSession);
@@ -539,7 +562,7 @@ function App() {
         setSuccess('Reconnecting to room...');
       } catch (e) {
         setError('Failed to reconnect');
-        localStorage.removeItem('photoRouletteSession');
+        localStorage.removeItem('photoBlenderSession');
       }
     }
   };
@@ -558,7 +581,7 @@ function App() {
         {currentView === 'home' && (
           <div>
             {/* Show rejoin button if session exists */}
-            {localStorage.getItem('photoRouletteSession') && (
+            {localStorage.getItem('photoBlenderSession') && (
               <div style={{ marginBottom: '20px', textAlign: 'center' }}>
                 <button
                   className="button button-primary"
