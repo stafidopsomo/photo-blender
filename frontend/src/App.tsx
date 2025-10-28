@@ -69,6 +69,7 @@ function App() {
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [photoStartTime, setPhotoStartTime] = useState<number>(0);
   const [uploadMode, setUploadMode] = useState<'manual' | 'auto'>('manual');
+  const [showPlayersList, setShowPlayersList] = useState(false);
 
   // Check for saved session on mount (reconnection)
   useEffect(() => {
@@ -161,6 +162,18 @@ function App() {
           leaderboard: data.leaderboard
         });
         setGameState(prev => ({ ...prev, gameState: 'finished' }));
+      });
+
+      newSocket.on('gameReset', (state: GameState) => {
+        console.log('Game reset event received', state);
+        setCurrentView('waiting');
+        setGameState(state);
+        setCurrentPhoto(null);
+        setSelectedPlayer('');
+        setPhotoResults(null);
+        setUploadedPhotos([]);
+        setSuccess('Game reset! Upload new photos to play again.');
+        setTimeout(() => setSuccess(''), 3000);
       });
 
       return () => {
@@ -444,6 +457,31 @@ function App() {
     }
   };
 
+  const playAgain = async () => {
+    // Reset to waiting room but keep players in the same room
+    try {
+      await axios.post(`${API_BASE}/api/reset-game`, {
+        roomCode,
+        playerId
+      });
+
+      // Reset local state
+      setCurrentView('waiting');
+      setCurrentPhoto(null);
+      setSelectedPlayer('');
+      setPhotoResults(null);
+      setUploadedPhotos([]);
+      setGameState(prev => ({
+        ...prev,
+        gameState: 'waiting'
+      }));
+      setSuccess('Game reset! Upload photos to start a new game.');
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to reset game');
+    }
+  };
+
   // Rejoin with saved session
   const rejoinSession = () => {
     const savedSession = localStorage.getItem('photoRouletteSession');
@@ -568,46 +606,72 @@ function App() {
 
         {currentView === 'waiting' && (
           <div className="waiting-room">
-            <h2>Room: {roomCode}</h2>
-            <p>Share this code with your friends!</p>
-            
-            <div className="players-list">
-              <h3>Players ({gameState.players.length})</h3>
-              {gameState.players.map((player) => (
-                <div key={player.id} className="player-item">
-                  <span>
-                    {player.name}
-                    {player.isHost && <span className="host-badge">👑 Host</span>}
-                  </span>
-                  <span>{player.photosUploaded || 0} photos</span>
+            <h2 style={{ fontSize: '1.5rem', marginBottom: '8px' }}>Room: {roomCode}</h2>
+            <p style={{ fontSize: '0.9rem', marginBottom: '16px', opacity: 0.9 }}>Share this code with your friends!</p>
+
+            {/* Collapsible Players List */}
+            <div className="players-list-collapsible">
+              <button
+                onClick={() => setShowPlayersList(!showPlayersList)}
+                style={{
+                  width: '100%',
+                  padding: '12px 16px',
+                  background: 'rgba(255, 255, 255, 0.12)',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                  borderRadius: '12px',
+                  color: 'white',
+                  fontWeight: '600',
+                  fontSize: '1rem',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  transition: 'all 0.3s ease'
+                }}
+              >
+                <span>👥 Players ({gameState.players.length}) • 📸 {gameState.totalPhotos} photos</span>
+                <span style={{ fontSize: '1.2rem', transition: 'transform 0.3s ease', transform: showPlayersList ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+                  ▼
+                </span>
+              </button>
+
+              {showPlayersList && (
+                <div className="players-list" style={{ marginTop: '8px', animation: 'slideDown 0.3s ease' }}>
+                  {gameState.players.map((player) => (
+                    <div key={player.id} className="player-item">
+                      <span>
+                        {player.name}
+                        {player.isHost && <span className="host-badge">👑 Host</span>}
+                      </span>
+                      <span>{player.photosUploaded || 0} photos</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
             </div>
 
-            <div className="photo-upload">
-              <h3>Upload Photos</h3>
-              <p>Each player should upload 5 photos from their gallery</p>
+            <div className="photo-upload" style={{ marginTop: '16px' }}>
+              <h3 style={{ fontSize: '1.1rem', marginBottom: '12px' }}>📸 Upload Your Photos</h3>
 
               {/* Mode Toggle */}
               <div style={{
                 display: 'flex',
-                gap: '10px',
-                marginTop: '20px',
-                marginBottom: '15px'
+                gap: '8px',
+                marginBottom: '12px'
               }}>
                 <button
                   className={`button ${uploadMode === 'manual' ? 'button-primary' : 'button-secondary'}`}
                   onClick={() => setUploadMode('manual')}
-                  style={{ flex: 1 }}
+                  style={{ flex: 1, fontSize: '0.85rem', padding: '10px 16px' }}
                 >
-                  📷 Manual Select
+                  📷 Manual
                 </button>
                 <button
                   className={`button ${uploadMode === 'auto' ? 'button-primary' : 'button-secondary'}`}
                   onClick={() => setUploadMode('auto')}
-                  style={{ flex: 1 }}
+                  style={{ flex: 1, fontSize: '0.85rem', padding: '10px 16px' }}
                 >
-                  🎲 Random Pick
+                  🎲 Random
                 </button>
               </div>
 
@@ -615,19 +679,10 @@ function App() {
                 onDrop={handleDrop}
                 onDragOver={handleDragOver}
                 onClick={() => document.getElementById('photo-input-multiple')?.click()}
-                style={{
-                  cursor: 'pointer',
-                  padding: '20px',
-                  marginTop: '10px',
-                  border: '2px dashed #6c63ff',
-                  borderRadius: '8px',
-                  backgroundColor: 'rgba(108, 99, 255, 0.1)'
-                }}
+                className="photo-upload-zone"
               >
-                <p style={{ textAlign: 'center', margin: 0 }}>
-                  {uploadMode === 'manual'
-                    ? '📷 Click to manually select 5 photos'
-                    : '🎲 Click to let us randomly pick 5 photos from your gallery'}
+                <p style={{ textAlign: 'center', margin: 0, fontSize: '0.9rem' }}>
+                  {uploadMode === 'manual' ? '📷 Select 5 photos' : '🎲 Pick 5 random photos'}
                 </p>
                 <input
                   id="photo-input-multiple"
@@ -651,41 +706,59 @@ function App() {
               )}
 
               {uploadedPhotos.length > 0 && !loading && (
-                <div style={{ marginTop: '15px' }}>
+                <div style={{ marginTop: '12px', fontSize: '0.9rem' }}>
                   <p>✅ Uploaded: {uploadedPhotos.length} photos</p>
                 </div>
               )}
             </div>
 
-            <div style={{ marginTop: '30px' }}>
-              <p>Total photos: {gameState.totalPhotos}</p>
-              <p>Need at least 2 players and 10 total photos to start</p>
+            {/* Total Photos Display */}
+            <div style={{
+              marginTop: '16px',
+              padding: '12px',
+              background: 'rgba(255, 255, 255, 0.08)',
+              borderRadius: '12px',
+              textAlign: 'center',
+              fontSize: '0.95rem',
+              fontWeight: '600'
+            }}>
+              📸 Total Photos: {gameState.totalPhotos}
+            </div>
 
+            {/* Action Buttons */}
+            <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {isHost && gameState.canStartGame && (
                 <button
                   className="button button-primary"
                   onClick={startGame}
                   disabled={loading}
-                  style={{ marginTop: '15px' }}
+                  style={{ width: '100%' }}
                 >
                   {loading ? 'Starting...' : '🎮 Start Game!'}
                 </button>
               )}
 
               {!isHost && (
-                <p style={{ marginTop: '15px', opacity: 0.7, fontSize: '0.9rem' }}>
-                  Waiting for host to start the game...
-                </p>
+                <div style={{
+                  padding: '12px',
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  borderRadius: '12px',
+                  textAlign: 'center',
+                  fontSize: '0.9rem',
+                  opacity: 0.9
+                }}>
+                  ⏳ Waiting for host to start...
+                </div>
               )}
-            </div>
 
-            <button 
-              className="button button-secondary"
-              onClick={resetGame}
-              style={{ marginTop: '20px' }}
-            >
-              Leave Game
-            </button>
+              <button
+                className="button button-secondary"
+                onClick={resetGame}
+                style={{ width: '100%' }}
+              >
+                Leave Game
+              </button>
+            </div>
           </div>
         )}
 
@@ -889,13 +962,20 @@ function App() {
               ))}
             </div>
 
-            <button 
-              className="button button-primary"
-              onClick={resetGame}
-              style={{ marginTop: '20px' }}
-            >
-              Play Again
-            </button>
+            <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <button
+                className="button button-primary"
+                onClick={playAgain}
+              >
+                🔄 Play Again
+              </button>
+              <button
+                className="button button-secondary"
+                onClick={resetGame}
+              >
+                Leave Game
+              </button>
+            </div>
           </div>
         )}
 

@@ -475,6 +475,70 @@ app.post('/api/submit-guess', (req, res) => {
   res.json({ message: 'Guess submitted' });
 });
 
+// Reset game (Play Again)
+app.post('/api/reset-game', (req, res) => {
+  const { roomCode, playerId } = req.body;
+
+  const gameRoom = gameRooms.get(roomCode?.toUpperCase());
+  if (!gameRoom) {
+    return res.status(404).json({ error: 'Room not found' });
+  }
+
+  // Check if the player is the host
+  if (playerId !== gameRoom.hostId) {
+    return res.status(403).json({ error: 'Only the host can reset the game' });
+  }
+
+  // Clear all timers
+  if (gameRoom.roundTimer) {
+    clearTimeout(gameRoom.roundTimer);
+    gameRoom.roundTimer = null;
+  }
+  if (gameRoom.resultsTimer) {
+    clearTimeout(gameRoom.resultsTimer);
+    gameRoom.resultsTimer = null;
+  }
+
+  // Reset game state but keep players
+  gameRoom.photos = [];
+  gameRoom.currentPhotoIndex = 0;
+  gameRoom.gameState = 'waiting';
+  gameRoom.currentRound = 0;
+
+  // Reset all player scores and photo counts
+  gameRoom.players.forEach((player) => {
+    player.photosUploaded = 0;
+    player.score = 0;
+    player.streak = 0;
+  });
+
+  // Reset scores map
+  gameRoom.scores.clear();
+  gameRoom.players.forEach((player) => {
+    gameRoom.scores.set(player.id, 0);
+  });
+
+  console.log(`Game reset in room ${roomCode} by host ${playerId}`);
+
+  // Broadcast reset to all players in the room
+  const fullGameState = {
+    gameState: gameRoom.gameState,
+    players: Array.from(gameRoom.players.values()).map(p => ({
+      id: p.id,
+      name: p.name,
+      photosUploaded: p.photosUploaded,
+      isHost: p.isHost
+    })),
+    totalPhotos: gameRoom.photos.length,
+    canStartGame: gameRoom.canStartGame(),
+    hostId: gameRoom.hostId
+  };
+
+  io.to(roomCode.toUpperCase()).emit('gameReset', fullGameState);
+
+  res.json({ message: 'Game reset successfully' });
+});
+
 // Helper function to show photo results
 function showPhotoResults(gameRoom) {
   const currentPhoto = gameRoom.getCurrentPhoto();
