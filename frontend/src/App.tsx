@@ -152,8 +152,15 @@ function App() {
       });
 
       newSocket.on('gameFinished', (data: { leaderboard: Array<{ name: string; score: number }> }) => {
+        console.log('Game finished event received', data);
         setCurrentView('results');
-        setPhotoResults({ ...photoResults!, leaderboard: data.leaderboard });
+        setPhotoResults({
+          correctPlayer: '',
+          correctPlayerId: '',
+          guesses: [],
+          leaderboard: data.leaderboard
+        });
+        setGameState(prev => ({ ...prev, gameState: 'finished' }));
       });
 
       return () => {

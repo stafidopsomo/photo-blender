@@ -506,8 +506,25 @@ function showPhotoResults(gameRoom) {
       showNextPhoto(gameRoom);
     } else {
       gameRoom.gameState = 'finished';
+      const finalLeaderboard = gameRoom.getLeaderboard();
+      console.log(`Game finished in room ${gameRoom.roomCode}. Sending final results to all players:`, finalLeaderboard);
+
+      // Emit to all players in the room
       io.to(gameRoom.roomCode).emit('gameFinished', {
-        leaderboard: gameRoom.getLeaderboard()
+        leaderboard: finalLeaderboard
+      });
+
+      // Also emit directly to each player's socket as backup
+      gameRoom.players.forEach((player) => {
+        const socket = io.sockets.sockets.get(player.socketId);
+        if (socket) {
+          console.log(`Sending gameFinished to player ${player.name} (${player.id})`);
+          socket.emit('gameFinished', {
+            leaderboard: finalLeaderboard
+          });
+        } else {
+          console.log(`Could not find socket for player ${player.name} (${player.id})`);
+        }
       });
     }
   }, 5000); // Show results for 5 seconds
