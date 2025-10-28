@@ -164,7 +164,7 @@ function App() {
         setGameState(prev => ({ ...prev, gameState: 'finished' }));
       });
 
-      newSocket.on('gameReset', (state: GameState) => {
+      newSocket.on('gameReset', (state: GameState & { hostId?: string }) => {
         console.log('Game reset event received', state);
         setCurrentView('waiting');
         setGameState(state);
@@ -172,6 +172,13 @@ function App() {
         setSelectedPlayer('');
         setPhotoResults(null);
         setUploadedPhotos([]);
+
+        // Update isHost state based on the hostId from server
+        if (state.hostId) {
+          setIsHost(playerId === state.hostId);
+          console.log('Updated isHost:', playerId === state.hostId, 'playerId:', playerId, 'hostId:', state.hostId);
+        }
+
         setSuccess('Game reset! Upload new photos to play again.');
         setTimeout(() => setSuccess(''), 3000);
       });
@@ -378,15 +385,15 @@ function App() {
     let filesToUpload: File[] = [];
 
     if (uploadMode === 'auto') {
-      // RANDOM AUTO-PICK MODE: Randomly select 5 photos
+      // RANDOM AUTO-PICK MODE: Shuffle and upload all selected photos
       const filesArray = Array.from(files);
       const shuffled = filesArray.sort(() => 0.5 - Math.random());
-      filesToUpload = shuffled.slice(0, 5);
-      setSuccess('🎲 Randomly picked 5 photos from your selection!');
+      filesToUpload = shuffled;
+      setSuccess(`🎲 Randomly shuffled ${filesToUpload.length} photos!`);
       setTimeout(() => setSuccess(''), 2000);
     } else {
-      // MANUAL MODE: Take first 5 files user selected
-      filesToUpload = Array.from(files).slice(0, 5);
+      // MANUAL MODE: Upload all selected files
+      filesToUpload = Array.from(files);
     }
 
     setLoading(true);
@@ -682,7 +689,7 @@ function App() {
                 className="photo-upload-zone"
               >
                 <p style={{ textAlign: 'center', margin: 0, fontSize: '0.9rem' }}>
-                  {uploadMode === 'manual' ? '📷 Select 5 photos' : '🎲 Pick 5 random photos'}
+                  {uploadMode === 'manual' ? '📷 Select photos' : '🎲 Shuffle & upload all'}
                 </p>
                 <input
                   id="photo-input-multiple"
