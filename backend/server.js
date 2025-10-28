@@ -123,8 +123,14 @@ class GameRoom {
   }
 
   removePlayer(playerId) {
+    const wasHost = this.hostId === playerId;
     this.players.delete(playerId);
     this.scores.delete(playerId);
+
+    // If the removed player was the host, reassign
+    if (wasHost && this.players.size > 0) {
+      this.reassignHost();
+    }
   }
 
   addPhoto(playerId, photoPath) {
@@ -239,6 +245,18 @@ class GameRoom {
     const playersWithPhotos = Array.from(this.players.values())
       .filter(player => player.photosUploaded > 0);
     return playersWithPhotos.length >= 2 && this.photos.length >= 10;
+  }
+
+  reassignHost() {
+    // Find the first available player to become host
+    const firstPlayer = Array.from(this.players.values())[0];
+    if (firstPlayer) {
+      this.hostId = firstPlayer.id;
+      firstPlayer.isHost = true;
+      console.log(`New host assigned: ${firstPlayer.name} (${firstPlayer.id})`);
+      return firstPlayer.id;
+    }
+    return null;
   }
 }
 
@@ -596,11 +614,27 @@ io.on('connection', (socket) => {
       if (gameRoom) {
         const player = gameRoom.players.get(playerInfo.playerId);
         if (player) {
+          const wasHost = player.isHost;
+
           // During waiting phase, keep player data to allow reconnection
           // Only remove player if game is in progress or finished
           if (gameRoom.gameState === 'waiting' || gameRoom.gameState === 'uploading') {
             // Keep player in the game but mark them as disconnected
             console.log(`Player ${player.name} disconnected from room ${playerInfo.roomCode} (waiting phase - data preserved for reconnection)`);
+
+            // If host disconnects during waiting, reassign host immediately
+            if (wasHost && gameRoom.players.size > 1) {
+              // Find a connected player to be the new host
+              for (const [pid, p] of gameRoom.players.entries()) {
+                if (pid !== playerInfo.playerId && playerSockets.has(p.socketId)) {
+                  gameRoom.hostId = pid;
+                  p.isHost = true;
+                  player.isHost = false;
+                  console.log(`Host reassigned to ${p.name} (${pid}) while in waiting phase`);
+                  break;
+                }
+              }
+            }
 
             // Notify others that player left (but they can rejoin)
             socket.to(playerInfo.roomCode).emit('playerLeft', {
@@ -616,6 +650,23 @@ io.on('connection', (socket) => {
               playerName: player.name,
               totalPlayers: gameRoom.players.size
             });
+          }
+
+          // If the host left, broadcast updated game state with new host
+          if (wasHost && gameRoom.players.size > 0) {
+            const fullGameState = {
+              gameState: gameRoom.gameState,
+              players: Array.from(gameRoom.players.values()).map(p => ({
+                id: p.id,
+                name: p.name,
+                photosUploaded: p.photosUploaded,
+                isHost: p.isHost
+              })),
+              totalPhotos: gameRoom.photos.length,
+              canStartGame: gameRoom.canStartGame(),
+              hostId: gameRoom.hostId
+            };
+            io.to(playerInfo.roomCode).emit('gameState', fullGameState);
           }
 
           // Clean up empty rooms

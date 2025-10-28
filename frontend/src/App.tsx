@@ -313,8 +313,10 @@ function App() {
     }
   };
 
-  const submitGuess = async () => {
-    if (!selectedPlayer) {
+  const submitGuess = async (guessedPlayerId?: string) => {
+    const playerToGuess = guessedPlayerId || selectedPlayer;
+
+    if (!playerToGuess) {
       setError('Please select a player');
       return;
     }
@@ -329,10 +331,11 @@ function App() {
       await axios.post(`${API_BASE}/api/submit-guess`, {
         roomCode,
         playerId,
-        guessedPlayerId: selectedPlayer,
+        guessedPlayerId: playerToGuess,
         timeToAnswer
       });
 
+      setSelectedPlayer(playerToGuess);
       setHasSubmittedGuess(true);
       setSuccess('Guess submitted! Waiting for other players...');
       setTimeout(() => setSuccess(''), 2000);
@@ -701,43 +704,104 @@ function App() {
 
             {!photoResults && (
               <>
-                <h3 style={{ textAlign: 'center', marginBottom: '20px' }}>
+                <h3 style={{ textAlign: 'center', marginBottom: '16px', fontSize: '1.3rem' }}>
                   Whose photo is this?
                 </h3>
-                
-                <div className="players-grid">
-                  {currentPhoto.players.map((player) => (
-                    <button
-                      key={player.id}
-                      className={`player-button ${selectedPlayer === player.id ? 'selected' : ''}`}
-                      onClick={() => setSelectedPlayer(player.id)}
-                    >
-                      {player.name}
-                    </button>
-                  ))}
-                </div>
 
-                <button
-                  className="button button-primary"
-                  onClick={submitGuess}
-                  disabled={!selectedPlayer || hasSubmittedGuess}
-                  style={{ width: '100%', marginTop: '20px' }}
-                >
-                  {hasSubmittedGuess ? 'Submitted ✓' : 'Submit Guess'}
-                </button>
+                {!hasSubmittedGuess && (
+                  <div className="players-grid">
+                    {currentPhoto.players.map((player) => (
+                      <button
+                        key={player.id}
+                        className="player-button"
+                        onClick={() => submitGuess(player.id)}
+                      >
+                        {player.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {hasSubmittedGuess && (
+                  <div style={{
+                    textAlign: 'center',
+                    padding: '32px',
+                    background: 'rgba(34, 197, 94, 0.15)',
+                    borderRadius: '20px',
+                    border: '2px solid rgba(34, 197, 94, 0.4)',
+                    marginTop: '20px'
+                  }}>
+                    <div style={{ fontSize: '3rem', marginBottom: '12px' }}>✓</div>
+                    <div style={{ fontSize: '1.2rem', fontWeight: '600', color: '#bbf7d0' }}>
+                      Guess Submitted!
+                    </div>
+                    <div style={{ fontSize: '0.9rem', marginTop: '8px', opacity: 0.9 }}>
+                      Waiting for other players...
+                    </div>
+                  </div>
+                )}
               </>
             )}
 
             {photoResults && (
               <div style={{ textAlign: 'center' }}>
-                <h3>Correct Answer: {photoResults.correctPlayer}</h3>
-                
+                <h3 style={{ fontSize: '1.5rem', marginBottom: '20px' }}>
+                  ✓ Correct: {photoResults.correctPlayer}
+                </h3>
+
+                {/* Show who guessed what */}
+                <div style={{
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  backdropFilter: 'blur(10px)',
+                  borderRadius: '20px',
+                  padding: '20px',
+                  marginBottom: '24px',
+                  border: '1px solid rgba(255, 255, 255, 0.15)'
+                }}>
+                  <h4 style={{ marginBottom: '16px', fontSize: '1.1rem', opacity: 0.9 }}>
+                    Round Results
+                  </h4>
+                  {photoResults.guesses.map((guess, index) => (
+                    <div key={index} style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '12px 16px',
+                      marginBottom: '8px',
+                      background: guess.correct
+                        ? 'rgba(34, 197, 94, 0.15)'
+                        : 'rgba(239, 68, 68, 0.15)',
+                      borderRadius: '12px',
+                      border: `2px solid ${guess.correct ? 'rgba(34, 197, 94, 0.4)' : 'rgba(239, 68, 68, 0.3)'}`,
+                      fontSize: '0.95rem'
+                    }}>
+                      <span style={{ fontWeight: '600' }}>
+                        {guess.correct ? '✓' : '✗'} {guess.guesser}
+                      </span>
+                      <span style={{ opacity: 0.9, fontSize: '0.9rem' }}>
+                        → {guess.guessed}
+                      </span>
+                      <span style={{
+                        fontSize: '0.85rem',
+                        opacity: 0.8,
+                        background: 'rgba(255, 255, 255, 0.1)',
+                        padding: '4px 8px',
+                        borderRadius: '8px'
+                      }}>
+                        {guess.timeToAnswer?.toFixed(1)}s
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
                 <div className="leaderboard results-container">
-                  <h4>Current Scores</h4>
+                  <h4 style={{ fontSize: '1.2rem', marginBottom: '16px' }}>
+                    📊 Leaderboard
+                  </h4>
                   {photoResults.leaderboard.map((player, index) => (
                     <div key={index} className="leaderboard-item">
                       <span className="rank">#{index + 1}</span>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
                         {player.name}
                         {player.streak && player.streak >= 3 && (
                           <span className="streak-badge">
@@ -745,7 +809,7 @@ function App() {
                           </span>
                         )}
                       </span>
-                      <span style={{ fontWeight: '700' }}>{player.score} pts</span>
+                      <span style={{ fontWeight: '700', fontSize: '1.1rem' }}>{player.score} pts</span>
                     </div>
                   ))}
                 </div>
