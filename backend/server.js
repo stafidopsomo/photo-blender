@@ -84,6 +84,7 @@ class GameRoom {
     this.scores = new Map();
     this.roundTimer = null;
     this.resultsTimer = null;
+    this.cleanupTimer = null; // Timer to cleanup room after game ends
     this.hostId = null; // Track the host player ID
     this.gameSettings = {
       maxPlayers: 8,
@@ -274,10 +275,24 @@ function getPlayerFromSocket(socketId) {
 
 // Create a new game room
 app.post('/api/create-room', (req, res) => {
-  const roomCode = generateRoomCode();
+  // Generate unique room code (check for collisions)
+  let roomCode;
+  let attempts = 0;
+  const MAX_ATTEMPTS = 10;
+
+  do {
+    roomCode = generateRoomCode();
+    attempts++;
+    if (attempts >= MAX_ATTEMPTS) {
+      return res.status(500).json({ error: 'Failed to generate unique room code. Please try again.' });
+    }
+  } while (gameRooms.has(roomCode));
+
   const gameRoom = new GameRoom(roomCode);
   gameRooms.set(roomCode, gameRoom);
-  
+
+  console.log(`Room created: ${roomCode}, Total rooms: ${gameRooms.size}`);
+
   res.json({ roomCode });
 });
 
@@ -337,6 +352,14 @@ app.post('/api/upload-photo', upload.single('photo'), async (req, res) => {
     const player = gameRoom.players.get(playerId);
     if (!player) {
       return res.status(404).json({ error: 'Player not found in room' });
+    }
+
+    // Limit photos per player to prevent abuse
+    const MAX_PHOTOS_PER_PLAYER = 20;
+    if (player.photosUploaded >= MAX_PHOTOS_PER_PLAYER) {
+      // Clean up the uploaded file
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: `Maximum ${MAX_PHOTOS_PER_PLAYER} photos per player` });
     }
 
     // Compress and resize image
@@ -498,6 +521,10 @@ app.post('/api/reset-game', (req, res) => {
     clearTimeout(gameRoom.resultsTimer);
     gameRoom.resultsTimer = null;
   }
+  if (gameRoom.cleanupTimer) {
+    clearTimeout(gameRoom.cleanupTimer);
+    gameRoom.cleanupTimer = null;
+  }
 
   // Reset game state but keep players
   gameRoom.photos = [];
@@ -590,6 +617,13 @@ function showPhotoResults(gameRoom) {
           console.log(`Could not find socket for player ${player.name} (${player.id})`);
         }
       });
+
+      // Schedule room cleanup after 10 minutes of inactivity
+      gameRoom.cleanupTimer = setTimeout(() => {
+        console.log(`Cleaning up room ${gameRoom.roomCode} after game finished`);
+        gameRooms.delete(gameRoom.roomCode);
+        console.log(`Total active rooms: ${gameRooms.size}`);
+      }, 10 * 60 * 1000); // 10 minutes
     }
   }, 5000); // Show results for 5 seconds
 }
