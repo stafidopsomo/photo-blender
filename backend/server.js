@@ -93,12 +93,23 @@ class GameRoom {
   }
 
   addPlayer(playerId, playerName, socketId, isHost = false) {
+    // Check if player already exists (reconnection case)
+    const existingPlayer = this.players.get(playerId);
+
+    if (existingPlayer) {
+      // Player is reconnecting - just update their socket ID
+      existingPlayer.socketId = socketId;
+      console.log(`Player ${playerName} (${playerId}) reconnected to room ${this.roomCode}`);
+      return;
+    }
+
     // Set host if this is the first player
     if (this.players.size === 0) {
       this.hostId = playerId;
       isHost = true;
     }
 
+    // New player - create fresh entry
     this.players.set(playerId, {
       id: playerId,
       name: playerName,
@@ -233,7 +244,8 @@ class GameRoom {
 
 // Utility functions
 function generateRoomCode() {
-  return Math.random().toString(36).substring(2, 8).toUpperCase();
+  // Generate a 6-digit numeric code
+  return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
 function getPlayerFromSocket(socketId) {
@@ -519,16 +531,23 @@ io.on('connection', (socket) => {
   socket.on('joinRoom', ({ roomCode, playerId, playerName, isHost }) => {
     const gameRoom = gameRooms.get(roomCode?.toUpperCase());
     if (gameRoom) {
+      // Check if this player already exists (reconnection)
+      const isReconnection = gameRoom.players.has(playerId);
+
       gameRoom.addPlayer(playerId, playerName, socket.id, isHost || false);
       playerSockets.set(socket.id, { playerId, roomCode: roomCode.toUpperCase() });
 
       socket.join(roomCode.toUpperCase());
 
-      // Notify room about new player
-      socket.to(roomCode.toUpperCase()).emit('playerJoined', {
-        playerName,
-        totalPlayers: gameRoom.players.size
-      });
+      // Only notify about new player if it's NOT a reconnection
+      if (!isReconnection) {
+        socket.to(roomCode.toUpperCase()).emit('playerJoined', {
+          playerName,
+          totalPlayers: gameRoom.players.size
+        });
+      } else {
+        console.log(`Player ${playerName} reconnected to room ${roomCode.toUpperCase()}`);
+      }
 
       // Prepare full game state
       const fullGameState = {
@@ -544,31 +563,61 @@ io.on('connection', (socket) => {
         hostId: gameRoom.hostId
       };
 
-      // Send current game state to new player
+      // Send current game state to the player (new or reconnecting)
       socket.emit('gameState', fullGameState);
 
-      // Also broadcast updated state to all other players in the room
+      // If reconnecting during an active game, send the current photo
+      if (isReconnection && gameRoom.gameState === 'playing') {
+        const currentPhoto = gameRoom.getCurrentPhoto();
+        if (currentPhoto) {
+          socket.emit('newPhoto', {
+            photoUrl: currentPhoto.path,
+            photoIndex: gameRoom.currentPhotoIndex + 1,
+            totalPhotos: gameRoom.photos.length,
+            players: Array.from(gameRoom.players.values()).map(p => ({
+              id: p.id,
+              name: p.name
+            }))
+          });
+        }
+      }
+
+      // Broadcast updated state to all other players in the room
       socket.to(roomCode.toUpperCase()).emit('gameState', fullGameState);
     }
   });
   
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
-    
+
     const playerInfo = playerSockets.get(socket.id);
     if (playerInfo) {
       const gameRoom = gameRooms.get(playerInfo.roomCode);
       if (gameRoom) {
         const player = gameRoom.players.get(playerInfo.playerId);
         if (player) {
-          gameRoom.removePlayer(playerInfo.playerId);
-          
-          // Notify room about player leaving
-          socket.to(playerInfo.roomCode).emit('playerLeft', {
-            playerName: player.name,
-            totalPlayers: gameRoom.players.size
-          });
-          
+          // During waiting phase, keep player data to allow reconnection
+          // Only remove player if game is in progress or finished
+          if (gameRoom.gameState === 'waiting' || gameRoom.gameState === 'uploading') {
+            // Keep player in the game but mark them as disconnected
+            console.log(`Player ${player.name} disconnected from room ${playerInfo.roomCode} (waiting phase - data preserved for reconnection)`);
+
+            // Notify others that player left (but they can rejoin)
+            socket.to(playerInfo.roomCode).emit('playerLeft', {
+              playerName: player.name,
+              totalPlayers: gameRoom.players.size
+            });
+          } else {
+            // During active game, remove the player
+            gameRoom.removePlayer(playerInfo.playerId);
+
+            // Notify room about player leaving
+            socket.to(playerInfo.roomCode).emit('playerLeft', {
+              playerName: player.name,
+              totalPlayers: gameRoom.players.size
+            });
+          }
+
           // Clean up empty rooms
           if (gameRoom.players.size === 0) {
             gameRooms.delete(playerInfo.roomCode);

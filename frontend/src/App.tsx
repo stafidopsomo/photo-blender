@@ -221,7 +221,7 @@ function App() {
 
     try {
       const response = await axios.post(`${API_BASE}/api/join-room`, {
-        roomCode: roomCode.trim().toUpperCase(),
+        roomCode: roomCode.trim(),
         playerName: playerName.trim()
       });
 
@@ -525,9 +525,14 @@ function App() {
                   type="text"
                   className="input"
                   value={roomCode}
-                  onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-                  placeholder="Enter room code"
+                  onChange={(e) => {
+                    const value = e.target.value.replace(/\D/g, '');
+                    setRoomCode(value);
+                  }}
+                  placeholder="Enter 6-digit code"
                   maxLength={6}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
                 />
               </div>
             </div>
