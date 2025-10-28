@@ -31,6 +31,16 @@ body::before {
     radial-gradient(circle at 40% 20%, rgba(30, 60, 114, 0.3) 0%, transparent 50%);
   pointer-events: none;
   z-index: 0;
+  animation: backgroundFloat 20s ease-in-out infinite;
+}
+
+@keyframes backgroundFloat {
+  0%, 100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 0.8;
+  }
 }
 
 .app {
@@ -106,10 +116,20 @@ body::before {
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
-  animation: shimmer 4s linear infinite;
+  animation: shimmer 4s linear infinite, titleFloat 3s ease-in-out infinite;
   text-shadow: 0 0 40px rgba(255, 255, 255, 0.4);
   letter-spacing: -1px;
   line-height: 1.1;
+  filter: drop-shadow(0 0 20px rgba(167, 139, 250, 0.5));
+}
+
+@keyframes titleFloat {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
 }
 
 @keyframes shimmer {
@@ -194,14 +214,31 @@ body::before {
 }
 
 .button-primary:hover:not(:disabled) {
-  transform: translateY(-3px);
+  transform: translateY(-3px) scale(1.02);
   box-shadow:
-    0 8px 24px rgba(245, 87, 108, 0.4),
-    0 4px 12px rgba(240, 147, 251, 0.3);
+    0 8px 24px rgba(245, 87, 108, 0.6),
+    0 4px 12px rgba(240, 147, 251, 0.5),
+    0 0 40px rgba(240, 147, 251, 0.3);
+  animation: buttonGlow 1.5s ease-in-out infinite;
 }
 
 .button-primary:active:not(:disabled) {
-  transform: translateY(-1px);
+  transform: translateY(-1px) scale(0.98);
+}
+
+@keyframes buttonGlow {
+  0%, 100% {
+    box-shadow:
+      0 8px 24px rgba(245, 87, 108, 0.6),
+      0 4px 12px rgba(240, 147, 251, 0.5),
+      0 0 40px rgba(240, 147, 251, 0.3);
+  }
+  50% {
+    box-shadow:
+      0 12px 32px rgba(245, 87, 108, 0.8),
+      0 6px 16px rgba(240, 147, 251, 0.7),
+      0 0 60px rgba(240, 147, 251, 0.5);
+  }
 }
 
 .button-secondary {
@@ -234,7 +271,13 @@ body::before {
   margin-bottom: 20px;
   font-weight: 600;
   box-shadow: 0 4px 16px rgba(239, 68, 68, 0.2);
-  animation: slideInDown 0.4s ease-out;
+  animation: slideInDown 0.4s ease-out, errorShake 0.5s ease-in-out;
+}
+
+@keyframes errorShake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+  20%, 40%, 60%, 80% { transform: translateX(5px); }
 }
 
 .success {
@@ -247,7 +290,40 @@ body::before {
   margin-bottom: 20px;
   font-weight: 600;
   box-shadow: 0 4px 16px rgba(34, 197, 94, 0.2);
-  animation: slideInDown 0.4s ease-out;
+  animation: slideInDown 0.4s ease-out, successPulse 1s ease-in-out;
+  position: relative;
+  overflow: hidden;
+}
+
+.success::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.3) 0%, transparent 70%);
+  animation: successSparkle 2s linear infinite;
+}
+
+@keyframes successPulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.02);
+  }
+}
+
+@keyframes successSparkle {
+  0% {
+    transform: rotate(0deg);
+    opacity: 0.3;
+  }
+  100% {
+    transform: rotate(360deg);
+    opacity: 0.3;
+  }
 }
 
 @keyframes slideInDown {
@@ -382,6 +458,20 @@ body::before {
     0 8px 24px rgba(245, 87, 108, 0.4),
     0 0 20px rgba(240, 147, 251, 0.3);
   transform: translateY(-3px) scale(1.05);
+  animation: selectedPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes selectedPulse {
+  0%, 100% {
+    box-shadow:
+      0 8px 24px rgba(245, 87, 108, 0.4),
+      0 0 20px rgba(240, 147, 251, 0.3);
+  }
+  50% {
+    box-shadow:
+      0 12px 32px rgba(245, 87, 108, 0.6),
+      0 0 40px rgba(240, 147, 251, 0.5);
+  }
 }
 
 .waiting-room {

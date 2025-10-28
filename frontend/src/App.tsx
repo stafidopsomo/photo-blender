@@ -71,25 +71,52 @@ function App() {
   const [uploadMode, setUploadMode] = useState<'manual' | 'auto'>('manual');
   const [showPlayersList, setShowPlayersList] = useState(false);
 
-  // Check for saved session on mount (reconnection)
+  // Check URL for room code on mount
   useEffect(() => {
-    const savedSession = localStorage.getItem('photoRouletteSession');
-    if (savedSession) {
-      try {
-        const session = JSON.parse(savedSession);
-        // Auto-fill the form with saved data
-        setPlayerName(session.playerName || '');
-        setRoomCode(session.roomCode || '');
-        setPlayerId(session.playerId || '');
-        setIsHost(session.isHost || false);
+    const path = window.location.pathname;
+    const urlRoomCode = path.replace('/', '').trim();
 
-        // Show a reconnect prompt
-        if (session.roomCode && session.playerId && session.playerName) {
-          setSuccess(`Found previous session in room ${session.roomCode}. Rejoin?`);
+    if (urlRoomCode && /^\d{6}$/.test(urlRoomCode)) {
+      // Valid room code in URL
+      setRoomCode(urlRoomCode);
+
+      // Check for saved session
+      const savedSession = localStorage.getItem('photoRouletteSession');
+      if (savedSession) {
+        try {
+          const session = JSON.parse(savedSession);
+          if (session.roomCode === urlRoomCode && session.playerId && session.playerName) {
+            // Auto-rejoin if URL matches saved session
+            setPlayerName(session.playerName);
+            setPlayerId(session.playerId);
+            setIsHost(session.isHost || false);
+            setCurrentView('waiting');
+            return;
+          }
+        } catch (e) {
+          localStorage.removeItem('photoRouletteSession');
         }
-      } catch (e) {
-        // Invalid session data, clear it
-        localStorage.removeItem('photoRouletteSession');
+      }
+
+      // Room code in URL but no session - show join form
+      setCurrentView('join');
+    } else {
+      // No room code in URL - check for saved session
+      const savedSession = localStorage.getItem('photoRouletteSession');
+      if (savedSession) {
+        try {
+          const session = JSON.parse(savedSession);
+          setPlayerName(session.playerName || '');
+          setRoomCode(session.roomCode || '');
+          setPlayerId(session.playerId || '');
+          setIsHost(session.isHost || false);
+
+          if (session.roomCode && session.playerId && session.playerName) {
+            setSuccess(`Found previous session in room ${session.roomCode}. Rejoin?`);
+          }
+        } catch (e) {
+          localStorage.removeItem('photoRouletteSession');
+        }
       }
     }
   }, []);
@@ -223,6 +250,9 @@ function App() {
       setIsHost(joinResponse.data.isHost || true);
       setCurrentView('waiting');
 
+      // Update URL with room code
+      window.history.pushState({}, '', `/${newRoomCode}`);
+
       // Save session to localStorage for reconnection
       localStorage.setItem('photoRouletteSession', JSON.stringify({
         roomCode: newRoomCode,
@@ -256,6 +286,9 @@ function App() {
       setRoomCode(response.data.roomCode);
       setIsHost(response.data.isHost || false);
       setCurrentView('waiting');
+
+      // Update URL with room code
+      window.history.pushState({}, '', `/${response.data.roomCode}`);
 
       // Save session to localStorage for reconnection
       localStorage.setItem('photoRouletteSession', JSON.stringify({
@@ -442,6 +475,9 @@ function App() {
     // Clear session from localStorage
     localStorage.removeItem('photoRouletteSession');
 
+    // Clear URL
+    window.history.pushState({}, '', '/');
+
     setCurrentView('home');
     setRoomCode('');
     setPlayerId('');
@@ -512,8 +548,8 @@ function App() {
     <div className="app">
       <div className="container">
         <div className="header">
-          <h1 className="title">📸 Photo Roulette</h1>
-          <p className="subtitle">Guess whose photo it is!</p>
+          <h1 className="title">🎨 Photo Blender</h1>
+          <p className="subtitle">Mix, Match & Guess the Photos!</p>
         </div>
 
         {error && <div className="error">{error}</div>}
