@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import './TutorialPopup.css';
 
 interface TutorialPopupProps {
@@ -6,21 +6,13 @@ interface TutorialPopupProps {
 }
 
 const TutorialPopup: React.FC<TutorialPopupProps> = ({ onClose }) => {
-  const [dontShowAgain, setDontShowAgain] = useState(false);
-
-  const handleClose = () => {
-    if (dontShowAgain) {
-      localStorage.setItem('hidePhotoBl enderTutorial', 'true');
-    }
-    onClose();
-  };
 
   return (
     <div className="tutorial-overlay">
       <div className="tutorial-popup">
         <div className="tutorial-header">
           <h2>🎮 Welcome to Photo Blender!</h2>
-          <button className="close-btn" onClick={handleClose}>×</button>
+          <button className="close-btn" onClick={onClose}>×</button>
         </div>
 
         <div className="tutorial-content">
@@ -66,16 +58,8 @@ const TutorialPopup: React.FC<TutorialPopupProps> = ({ onClose }) => {
         </div>
 
         <div className="tutorial-footer">
-          <label className="dont-show-checkbox">
-            <input
-              type="checkbox"
-              checked={dontShowAgain}
-              onChange={(e) => setDontShowAgain(e.target.checked)}
-            />
-            <span>Don't show me this again</span>
-          </label>
-          <button className="start-playing-btn" onClick={handleClose}>
-            Start Playing! 🚀
+          <button className="start-playing-btn" onClick={onClose}>
+            Got it! 🚀
           </button>
         </div>
       </div>

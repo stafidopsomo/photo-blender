@@ -4,6 +4,10 @@ import axios from 'axios';
 import DOMPurify from 'dompurify';
 import './index.css';
 import TutorialPopup from './TutorialPopup';
+import PrivacyPopup from './PrivacyPopup';
+import LiveRoomBadge from './LiveRoomBadge';
+import PhotoDeletionAnimation from './PhotoDeletionAnimation';
+import FloatingLeaderboard from './FloatingLeaderboard';
 
 // Types
 interface Player {
@@ -81,14 +85,10 @@ function App() {
   const [uploadMode, setUploadMode] = useState<'manual' | 'auto'>('manual');
   const [showPlayersList, setShowPlayersList] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
-
-  // Check if tutorial should be shown on mount
-  useEffect(() => {
-    const hideTutorial = localStorage.getItem('hidePhotoBlenderTutorial');
-    if (!hideTutorial) {
-      setShowTutorial(true);
-    }
-  }, []);
+  const [showPrivacyPopup, setShowPrivacyPopup] = useState(false);
+  const [showDeletionAnimation, setShowDeletionAnimation] = useState(false);
+  const [photosToDelete, setPhotosToDelete] = useState<string[]>([]);
+  const [showFloatingLeaderboard, setShowFloatingLeaderboard] = useState(true);
 
   // Check URL for room code on mount
   useEffect(() => {
@@ -189,6 +189,7 @@ function App() {
         setTimeRemaining(30);
         setHasSubmittedGuess(false);
         setPhotoStartTime(Date.now());
+        setShowFloatingLeaderboard(true); // Reset visibility for new round
       });
 
       newSocket.on('photoResults', (data: PhotoResults) => {
@@ -198,9 +199,22 @@ function App() {
         }, 5000);
       });
 
-      newSocket.on('gameFinished', (data: { leaderboard: Array<{ name: string; score: number }> }) => {
+      newSocket.on('gameFinished', (data: { leaderboard: Array<{ name: string; score: number }>; photos?: string[] }) => {
         console.log('Game finished event received', data);
-        setCurrentView('results');
+
+        // Collect uploaded photos for deletion animation
+        const allPhotos = uploadedPhotos.length > 0 ? uploadedPhotos : (data.photos || []);
+
+        if (allPhotos.length > 0) {
+          // Show deletion animation first
+          setPhotosToDelete(allPhotos);
+          setShowDeletionAnimation(true);
+        } else {
+          // No photos to animate, go straight to results
+          setCurrentView('results');
+        }
+
+        // Store leaderboard for after animation
         setPhotoResults({
           correctPlayer: '',
           correctPlayerId: '',
@@ -577,14 +591,75 @@ function App() {
     }
   };
 
+  // Handle deletion animation completion
+  const handleDeletionComplete = () => {
+    setShowDeletionAnimation(false);
+    setPhotosToDelete([]);
+    setCurrentView('results');
+  };
+
   return (
     <div className="app">
       {showTutorial && <TutorialPopup onClose={() => setShowTutorial(false)} />}
+      {showPrivacyPopup && <PrivacyPopup onClose={() => setShowPrivacyPopup(false)} />}
+      {showDeletionAnimation && (
+        <PhotoDeletionAnimation
+          photos={photosToDelete}
+          onComplete={handleDeletionComplete}
+        />
+      )}
+
+      {/* Live Room Badge - visible when in a room */}
+      {(currentView === 'waiting' || currentView === 'game' || currentView === 'results') && (
+        <LiveRoomBadge
+          gameState={gameState.gameState}
+          isVisible={roomCode !== ''}
+        />
+      )}
 
       <div className="container">
         <div className="header">
           <h1 className="title">🎨 Photo Blender</h1>
           <p className="subtitle">Mix, Match & Guess the Photos!</p>
+
+          {/* Info Buttons */}
+          <div style={{
+            display: 'flex',
+            gap: '8px',
+            justifyContent: 'center',
+            marginTop: '12px'
+          }}>
+            <button
+              onClick={() => setShowTutorial(true)}
+              style={{
+                background: 'rgba(255, 255, 255, 0.1)',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                borderRadius: '8px',
+                padding: '8px 16px',
+                color: 'white',
+                fontSize: '0.85rem',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              ❓ How to Play
+            </button>
+            <button
+              onClick={() => setShowPrivacyPopup(true)}
+              style={{
+                background: 'rgba(255, 255, 255, 0.1)',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                borderRadius: '8px',
+                padding: '8px 16px',
+                color: 'white',
+                fontSize: '0.85rem',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+            >
+              🔒 Privacy
+            </button>
+          </div>
         </div>
 
         {error && <div className="error">{error}</div>}
@@ -1012,6 +1087,14 @@ function App() {
                   ))}
                 </div>
               </div>
+            )}
+
+            {/* Floating Leaderboard during game */}
+            {showFloatingLeaderboard && photoResults && photoResults.leaderboard && (
+              <FloatingLeaderboard
+                players={photoResults.leaderboard}
+                onClose={() => setShowFloatingLeaderboard(false)}
+              />
             )}
           </div>
         )}
