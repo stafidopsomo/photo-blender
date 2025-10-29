@@ -30,6 +30,10 @@ const io = socketIo(server, {
 
 const PORT = process.env.PORT || 5000;
 
+// Trust proxy - Required for Render.com and other reverse proxies
+// This allows rate limiters to correctly identify users by IP
+app.set('trust proxy', 1);
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -290,6 +294,18 @@ app.post('/api/reset-game', generalLimiter, (req, res) => {
     return res.status(403).json({ error: 'Only the host can reset the game' });
   }
 
+  // Prevent immediate reset - ensure players see final results for at least 3 seconds
+  if (!gameRoom.gameFinishedTime) {
+    gameRoom.gameFinishedTime = Date.now();
+  }
+  const timeSinceFinish = Date.now() - gameRoom.gameFinishedTime;
+  if (timeSinceFinish < 3000) {
+    return res.status(429).json({
+      error: 'Please wait a moment before resetting',
+      waitTime: Math.ceil((3000 - timeSinceFinish) / 1000)
+    });
+  }
+
   // Clear all timers
   if (gameRoom.roundTimer) clearTimeout(gameRoom.roundTimer);
   if (gameRoom.resultsTimer) clearTimeout(gameRoom.resultsTimer);
@@ -303,6 +319,7 @@ app.post('/api/reset-game', generalLimiter, (req, res) => {
   gameRoom.currentPhotoIndex = 0;
   gameRoom.gameState = 'waiting';
   gameRoom.currentRound = 0;
+  gameRoom.gameFinishedTime = null; // Clear finished timestamp
 
   gameRoom.players.forEach((player) => {
     player.photosUploaded = 0;
@@ -369,6 +386,7 @@ function showPhotoResults(gameRoom) {
       showNextPhoto(gameRoom);
     } else {
       gameRoom.gameState = 'finished';
+      gameRoom.gameFinishedTime = Date.now(); // Track when game finished for reset delay
       const finalLeaderboard = gameRoom.getLeaderboard();
       console.log(`Game finished in room ${gameRoom.roomCode}. Final results:`, finalLeaderboard);
 

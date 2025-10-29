@@ -3,6 +3,7 @@ import io, { Socket } from 'socket.io-client';
 import axios from 'axios';
 import DOMPurify from 'dompurify';
 import './index.css';
+import TutorialPopup from './TutorialPopup';
 
 // Types
 interface Player {
@@ -79,6 +80,15 @@ function App() {
   const [photoStartTime, setPhotoStartTime] = useState<number>(0);
   const [uploadMode, setUploadMode] = useState<'manual' | 'auto'>('manual');
   const [showPlayersList, setShowPlayersList] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
+
+  // Check if tutorial should be shown on mount
+  useEffect(() => {
+    const hideTutorial = localStorage.getItem('hidePhotoBlenderTutorial');
+    if (!hideTutorial) {
+      setShowTutorial(true);
+    }
+  }, []);
 
   // Check URL for room code on mount
   useEffect(() => {
@@ -569,6 +579,8 @@ function App() {
 
   return (
     <div className="app">
+      {showTutorial && <TutorialPopup onClose={() => setShowTutorial(false)} />}
+
       <div className="container">
         <div className="header">
           <h1 className="title">🎨 Photo Blender</h1>

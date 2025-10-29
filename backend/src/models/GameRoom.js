@@ -16,6 +16,7 @@ class GameRoom {
     this.roundTimer = null;
     this.resultsTimer = null;
     this.cleanupTimer = null; // Timer to cleanup room after game ends
+    this.gameFinishedTime = null; // Track when game finished for reset delay
     this.hostId = null; // Track the host player ID
     this.gameSettings = {
       maxPlayers: 8,
