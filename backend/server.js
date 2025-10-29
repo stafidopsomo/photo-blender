@@ -2,23 +2,22 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
-const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const sharp = require('sharp');
-const cloudinary = require('cloudinary').v2;
-const rateLimit = require('express-rate-limit');
-const { body, validationResult } = require('express-validator');
-const sanitizeHtml = require('sanitize-html');
 require('dotenv').config();
 
-// Configure Cloudinary
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'demo',
-  api_key: process.env.CLOUDINARY_API_KEY || 'demo',
-  api_secret: process.env.CLOUDINARY_API_SECRET || 'demo'
-});
+// Import refactored modules
+const { configureCloudinary, cloudinary } = require('./src/config/cloudinary');
+const { configureMulter } = require('./src/config/multer');
+const { createRoomLimiter, uploadLimiter, guessLimiter, generalLimiter } = require('./src/middleware/rateLimiter');
+const { generateRoomCode, sanitizePlayerName } = require('./src/utils/helpers');
+const GameRoom = require('./src/models/GameRoom');
+const FileCleanupService = require('./src/services/FileCleanupService');
+
+// Configure Cloudinary (with production validation)
+configureCloudinary();
 
 const app = express();
 const server = http.createServer(app);
@@ -48,410 +47,19 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 // Configure multer for file uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-const upload = multer({
-  storage: storage,
-  limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
-  },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed!'), false);
-    }
-  }
-});
+const upload = configureMulter(uploadsDir);
 
 // Game state management
 const gameRooms = new Map();
 const playerSockets = new Map();
 
-class GameRoom {
-  constructor(roomCode) {
-    this.roomCode = roomCode;
-    this.players = new Map();
-    this.photos = [];
-    this.currentPhotoIndex = 0;
-    this.gameState = 'waiting'; // waiting, uploading, playing, finished
-    this.currentRound = 0;
-    this.scores = new Map();
-    this.roundTimer = null;
-    this.resultsTimer = null;
-    this.cleanupTimer = null; // Timer to cleanup room after game ends
-    this.hostId = null; // Track the host player ID
-    this.gameSettings = {
-      maxPlayers: 8,
-      roundTime: 30, // seconds
-      totalRounds: 10
-    };
-  }
+// Initialize file cleanup service
+const fileCleanupService = new FileCleanupService(uploadsDir, gameRooms);
 
-  addPlayer(playerId, playerName, socketId, isHost = false) {
-    // Check if player already exists (reconnection case)
-    const existingPlayer = this.players.get(playerId);
-
-    if (existingPlayer) {
-      // Player is reconnecting - just update their socket ID
-      existingPlayer.socketId = socketId;
-      console.log(`Player ${playerName} (${playerId}) reconnected to room ${this.roomCode}`);
-      return;
-    }
-
-    // Set host if this is the first player
-    if (this.players.size === 0) {
-      this.hostId = playerId;
-      isHost = true;
-    }
-
-    // New player - create fresh entry
-    this.players.set(playerId, {
-      id: playerId,
-      name: playerName,
-      socketId: socketId,
-      photosUploaded: 0,
-      score: 0,
-      streak: 0,
-      isHost: playerId === this.hostId
-    });
-    this.scores.set(playerId, 0);
-  }
-
-  removePlayer(playerId) {
-    const wasHost = this.hostId === playerId;
-    this.players.delete(playerId);
-    this.scores.delete(playerId);
-
-    // If the removed player was the host, reassign
-    if (wasHost && this.players.size > 0) {
-      this.reassignHost();
-    }
-  }
-
-  addPhoto(playerId, photoPath) {
-    this.photos.push({
-      id: uuidv4(),
-      playerId: playerId,
-      path: photoPath,
-      guesses: new Map()
-    });
-    
-    const player = this.players.get(playerId);
-    if (player) {
-      player.photosUploaded++;
-    }
-  }
-
-  shufflePhotos() {
-    for (let i = this.photos.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [this.photos[i], this.photos[j]] = [this.photos[j], this.photos[i]];
-    }
-  }
-
-  getCurrentPhoto() {
-    return this.photos[this.currentPhotoIndex];
-  }
-
-  nextPhoto() {
-    this.currentPhotoIndex++;
-    return this.currentPhotoIndex < this.photos.length;
-  }
-
-  submitGuess(playerId, guessedPlayerId, timeToAnswer) {
-    const currentPhoto = this.getCurrentPhoto();
-    if (currentPhoto) {
-      currentPhoto.guesses.set(playerId, {
-        guessedPlayerId,
-        timeToAnswer,
-        timestamp: Date.now()
-      });
-
-      const player = this.players.get(playerId);
-      if (!player) return;
-
-      // Award points if correct
-      if (guessedPlayerId === currentPhoto.playerId) {
-        // Base points: 100
-        let points = 100;
-
-        // Note: Time bonuses will be calculated AFTER all players submit
-        // in the showPhotoResults function, so we can rank the top 3 fastest
-
-        // Streak bonus
-        player.streak = (player.streak || 0) + 1;
-        if (player.streak >= 3) {
-          points += player.streak * 10; // +10 per streak level after 3
-        }
-
-        const currentScore = this.scores.get(playerId) || 0;
-        this.scores.set(playerId, currentScore + points);
-        player.score = currentScore + points;
-      } else {
-        // Wrong answer - reset streak
-        player.streak = 0;
-      }
-    }
-  }
-
-  // Calculate and award time bonuses to top 3 fastest correct answers
-  awardTimeBonuses() {
-    const currentPhoto = this.getCurrentPhoto();
-    if (!currentPhoto) return;
-
-    // Get all correct guesses with their times
-    const correctGuesses = Array.from(currentPhoto.guesses.entries())
-      .filter(([playerId, guess]) => guess.guessedPlayerId === currentPhoto.playerId)
-      .map(([playerId, guess]) => ({
-        playerId,
-        timeToAnswer: guess.timeToAnswer
-      }))
-      .sort((a, b) => a.timeToAnswer - b.timeToAnswer); // Sort by speed (fastest first)
-
-    // Award bonuses to top 3 fastest based on their actual time
-    for (let i = 0; i < Math.min(3, correctGuesses.length); i++) {
-      const { playerId, timeToAnswer } = correctGuesses[i];
-      const player = this.players.get(playerId);
-      if (player) {
-        // Time bonus based on speed (faster = more points)
-        // Max bonus: 100 points for instant answer (0s)
-        // Min bonus: 0 points for 30s answer
-        const maxTime = 30; // seconds
-        const bonus = Math.round(Math.max(0, (maxTime - timeToAnswer) / maxTime * 100));
-
-        const currentScore = this.scores.get(playerId) || 0;
-        this.scores.set(playerId, currentScore + bonus);
-        player.score = currentScore + bonus;
-      }
-    }
-  }
-
-  getLeaderboard() {
-    return Array.from(this.players.values())
-      .sort((a, b) => (b.score || 0) - (a.score || 0))
-      .map(player => ({
-        name: player.name,
-        score: player.score || 0,
-        streak: player.streak || 0
-      }));
-  }
-
-  canStartGame() {
-    const playersWithPhotos = Array.from(this.players.values())
-      .filter(player => player.photosUploaded > 0);
-    return playersWithPhotos.length >= 2 && this.photos.length >= 10;
-  }
-
-  reassignHost() {
-    // Find the first available player to become host
-    const firstPlayer = Array.from(this.players.values())[0];
-    if (firstPlayer) {
-      this.hostId = firstPlayer.id;
-      firstPlayer.isHost = true;
-      console.log(`New host assigned: ${firstPlayer.name} (${firstPlayer.id})`);
-      return firstPlayer.id;
-    }
-    return null;
-  }
-}
-
-// Utility functions
-function generateRoomCode() {
-  // Generate a 6-digit numeric code
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
-function getPlayerFromSocket(socketId) {
-  return playerSockets.get(socketId);
-}
-
-// Sanitization function to prevent XSS attacks
-function sanitizePlayerName(name) {
-  if (!name || typeof name !== 'string') {
-    return '';
-  }
-
-  // Remove all HTML tags, only allow plain text
-  const sanitized = sanitizeHtml(name, {
-    allowedTags: [],
-    allowedAttributes: {}
-  });
-
-  // Trim whitespace and limit length
-  return sanitized.trim().substring(0, 20);
-}
-
-// File Cleanup Service to prevent resource leaks
-class FileCleanupService {
-  // Extract Cloudinary public ID from URL
-  extractCloudinaryPublicId(url) {
-    try {
-      // Cloudinary URLs format: https://res.cloudinary.com/{cloud_name}/image/upload/v{version}/{public_id}.{format}
-      const match = url.match(/\/photo-blender\/([^/.]+)/);
-      if (match) {
-        return `photo-blender/${match[1]}`;
-      }
-      return null;
-    } catch (err) {
-      console.error('Error extracting Cloudinary public ID:', err);
-      return null;
-    }
-  }
-
-  // Delete a single local file
-  async deleteLocalFile(filePath) {
-    try {
-      const fullPath = path.join(__dirname, filePath);
-      if (fs.existsSync(fullPath)) {
-        fs.unlinkSync(fullPath);
-        console.log(`Deleted local file: ${filePath}`);
-        return true;
-      }
-    } catch (err) {
-      console.error(`Failed to delete local file ${filePath}:`, err);
-      return false;
-    }
-  }
-
-  // Delete a single Cloudinary file
-  async deleteCloudinaryFile(url) {
-    try {
-      // Skip if not a Cloudinary URL
-      if (!url.includes('cloudinary.com')) {
-        return false;
-      }
-
-      const publicId = this.extractCloudinaryPublicId(url);
-      if (!publicId) {
-        console.error('Could not extract public ID from:', url);
-        return false;
-      }
-
-      // Only delete if Cloudinary is properly configured
-      if (process.env.CLOUDINARY_CLOUD_NAME && process.env.CLOUDINARY_CLOUD_NAME !== 'demo') {
-        await cloudinary.uploader.destroy(publicId);
-        console.log(`Deleted Cloudinary file: ${publicId}`);
-        return true;
-      }
-    } catch (err) {
-      console.error(`Failed to delete Cloudinary file ${url}:`, err);
-      return false;
-    }
-  }
-
-  // Clean up all photos for a game room
-  async cleanupGamePhotos(gameRoom) {
-    if (!gameRoom || !gameRoom.photos) {
-      return;
-    }
-
-    console.log(`Cleaning up ${gameRoom.photos.length} photos for room ${gameRoom.roomCode}`);
-
-    let deletedLocal = 0;
-    let deletedCloudinary = 0;
-
-    for (const photo of gameRoom.photos) {
-      const photoPath = photo.path;
-
-      // Delete from Cloudinary if it's a Cloudinary URL
-      if (photoPath.includes('cloudinary.com')) {
-        const deleted = await this.deleteCloudinaryFile(photoPath);
-        if (deleted) deletedCloudinary++;
-      }
-      // Delete local file if it's a local path
-      else if (photoPath.startsWith('/uploads/')) {
-        const deleted = await this.deleteLocalFile(photoPath);
-        if (deleted) deletedLocal++;
-      }
-    }
-
-    console.log(`Cleanup complete for room ${gameRoom.roomCode}: ${deletedLocal} local, ${deletedCloudinary} Cloudinary`);
-  }
-
-  // Clean up orphaned files (files not associated with any active room)
-  async cleanupOrphanedFiles() {
-    try {
-      console.log('Starting orphaned file cleanup...');
-
-      // Get all active photo paths from active rooms
-      const activePhotoPaths = new Set();
-      for (const [roomCode, gameRoom] of gameRooms.entries()) {
-        if (gameRoom.photos) {
-          gameRoom.photos.forEach(photo => {
-            activePhotoPaths.add(photo.path);
-          });
-        }
-      }
-
-      // Clean up local uploads directory
-      const uploadFiles = fs.readdirSync(uploadsDir);
-      let orphanedLocal = 0;
-
-      for (const file of uploadFiles) {
-        const filePath = `/uploads/${file}`;
-        if (!activePhotoPaths.has(filePath)) {
-          await this.deleteLocalFile(filePath);
-          orphanedLocal++;
-        }
-      }
-
-      console.log(`Orphaned file cleanup complete: ${orphanedLocal} local files removed`);
-    } catch (err) {
-      console.error('Error during orphaned file cleanup:', err);
-    }
-  }
-}
-
-const fileCleanupService = new FileCleanupService();
-
-// Rate limiters for different endpoints
-const createRoomLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // 10 room creations per 15 minutes per IP
-  message: { error: 'Too many rooms created. Please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const uploadLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 10, // 10 uploads per minute
-  message: { error: 'Too many uploads. Please slow down.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const guessLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 100, // 100 guesses per minute (generous for active games)
-  message: { error: 'Too many guess attempts. Please slow down.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const generalLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 50, // 50 requests per minute
-  message: { error: 'Too many requests. Please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-// API Routes
+// ===== API ROUTES =====
 
 // Create a new game room
 app.post('/api/create-room', createRoomLimiter, (req, res) => {
-  // Generate unique room code (check for collisions)
-  // Fix: Reserve the code immediately to prevent race condition
   let roomCode;
   let attempts = 0;
   const MAX_ATTEMPTS = 10;
@@ -464,12 +72,11 @@ app.post('/api/create-room', createRoomLimiter, (req, res) => {
     }
   } while (gameRooms.has(roomCode));
 
-  // Immediately reserve this code (atomic operation)
+  // Immediately reserve this code
   const gameRoom = new GameRoom(roomCode);
   gameRooms.set(roomCode, gameRoom);
 
   console.log(`Room created: ${roomCode}, Total rooms: ${gameRooms.size}`);
-
   res.json({ roomCode });
 });
 
@@ -481,7 +88,6 @@ app.post('/api/join-room', generalLimiter, (req, res) => {
     return res.status(400).json({ error: 'Room code and player name are required' });
   }
 
-  // Sanitize player name to prevent XSS attacks
   const sanitizedName = sanitizePlayerName(playerName);
 
   if (!sanitizedName || sanitizedName.length === 0) {
@@ -506,11 +112,8 @@ app.post('/api/join-room', generalLimiter, (req, res) => {
   }
 
   const playerId = uuidv4();
-
-  // Check if this will be the first player (host) BEFORE they're added
   const isHost = gameRoom.players.size === 0 || !gameRoom.hostId;
 
-  // Set as host if no host exists yet
   if (isHost) {
     gameRoom.hostId = playerId;
   }
@@ -520,7 +123,7 @@ app.post('/api/join-room', generalLimiter, (req, res) => {
     roomCode: gameRoom.roomCode,
     gameState: gameRoom.gameState,
     isHost,
-    sanitizedName // Return sanitized name so frontend uses it
+    sanitizedName
   });
 });
 
@@ -543,22 +146,21 @@ app.post('/api/upload-photo', uploadLimiter, upload.single('photo'), async (req,
       return res.status(404).json({ error: 'Player not found in room' });
     }
 
-    // Limit photos per player to prevent abuse
     const MAX_PHOTOS_PER_PLAYER = 20;
     if (player.photosUploaded >= MAX_PHOTOS_PER_PLAYER) {
-      // Clean up the uploaded file
       fs.unlinkSync(req.file.path);
       return res.status(400).json({ error: `Maximum ${MAX_PHOTOS_PER_PLAYER} photos per player` });
     }
 
-    // Compress and resize image
+    // Compress, resize, and strip EXIF metadata for privacy
     const compressedPath = path.join(uploadsDir, 'compressed-' + req.file.filename);
     await sharp(req.file.path)
+      .rotate() // Auto-rotate based on EXIF, then strip metadata
       .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality: 80 })
+      .withMetadata(false) // Strip all metadata including EXIF, GPS
       .toFile(compressedPath);
 
-    // Remove original file
     fs.unlinkSync(req.file.path);
 
     // Upload to Cloudinary
@@ -575,26 +177,20 @@ app.post('/api/upload-photo', uploadLimiter, upload.single('photo'), async (req,
           ]
         });
         photoUrl = result.secure_url;
-
-        // Remove local file after upload to cloudinary
         fs.unlinkSync(compressedPath);
       } catch (cloudError) {
         console.error('Cloudinary upload failed, using local storage:', cloudError);
-        // Fall back to local storage if cloudinary fails
       }
     }
 
-    // Add photo to game room with URL
     gameRoom.addPhoto(playerId, photoUrl);
 
-    // Notify room about photo upload
     io.to(roomCode.toUpperCase()).emit('photoUploaded', {
       playerName: player.name,
       totalPhotos: gameRoom.photos.length,
       canStartGame: gameRoom.canStartGame()
     });
 
-    // Broadcast updated game state to all players so they see photo counts
     const fullGameState = {
       gameState: gameRoom.gameState,
       players: Array.from(gameRoom.players.values()).map(p => ({
@@ -613,7 +209,6 @@ app.post('/api/upload-photo', uploadLimiter, upload.single('photo'), async (req,
       message: 'Photo uploaded successfully',
       totalPhotos: gameRoom.photos.length
     });
-
   } catch (error) {
     console.error('Upload error:', error);
     res.status(500).json({ error: 'Failed to upload photo' });
@@ -629,7 +224,6 @@ app.post('/api/start-game', generalLimiter, (req, res) => {
     return res.status(404).json({ error: 'Room not found' });
   }
 
-  // Check if the player is the host
   if (playerId !== gameRoom.hostId) {
     return res.status(403).json({ error: 'Only the host can start the game' });
   }
@@ -637,12 +231,11 @@ app.post('/api/start-game', generalLimiter, (req, res) => {
   if (!gameRoom.canStartGame()) {
     return res.status(400).json({ error: 'Cannot start game yet. Need at least 2 players and 10 total photos.' });
   }
-  
+
   gameRoom.gameState = 'playing';
   gameRoom.shufflePhotos();
   gameRoom.currentPhotoIndex = 0;
-  
-  // Start the game for all players
+
   io.to(roomCode.toUpperCase()).emit('gameStarted', {
     totalPhotos: gameRoom.photos.length,
     players: Array.from(gameRoom.players.values()).map(p => ({
@@ -650,12 +243,11 @@ app.post('/api/start-game', generalLimiter, (req, res) => {
       name: p.name
     }))
   });
-  
-  // Send first photo
+
   setTimeout(() => {
     showNextPhoto(gameRoom);
   }, 2000);
-  
+
   res.json({ message: 'Game started!' });
 });
 
@@ -670,13 +262,11 @@ app.post('/api/submit-guess', guessLimiter, (req, res) => {
 
   gameRoom.submitGuess(playerId, guessedPlayerId, timeToAnswer || 30);
 
-  // Check if all players have submitted
   const currentPhoto = gameRoom.getCurrentPhoto();
   const totalPlayers = gameRoom.players.size;
   const submittedGuesses = currentPhoto.guesses.size;
 
   if (submittedGuesses === totalPlayers) {
-    // All players submitted, show results immediately
     if (gameRoom.roundTimer) {
       clearTimeout(gameRoom.roundTimer);
       gameRoom.roundTimer = null;
@@ -696,39 +286,30 @@ app.post('/api/reset-game', generalLimiter, (req, res) => {
     return res.status(404).json({ error: 'Room not found' });
   }
 
-  // Check if the player is the host
   if (playerId !== gameRoom.hostId) {
     return res.status(403).json({ error: 'Only the host can reset the game' });
   }
 
   // Clear all timers
-  if (gameRoom.roundTimer) {
-    clearTimeout(gameRoom.roundTimer);
-    gameRoom.roundTimer = null;
-  }
-  if (gameRoom.resultsTimer) {
-    clearTimeout(gameRoom.resultsTimer);
-    gameRoom.resultsTimer = null;
-  }
-  if (gameRoom.cleanupTimer) {
-    clearTimeout(gameRoom.cleanupTimer);
-    gameRoom.cleanupTimer = null;
-  }
+  if (gameRoom.roundTimer) clearTimeout(gameRoom.roundTimer);
+  if (gameRoom.resultsTimer) clearTimeout(gameRoom.resultsTimer);
+  if (gameRoom.cleanupTimer) clearTimeout(gameRoom.cleanupTimer);
+  gameRoom.roundTimer = null;
+  gameRoom.resultsTimer = null;
+  gameRoom.cleanupTimer = null;
 
-  // Reset game state but keep players
+  // Reset game state
   gameRoom.photos = [];
   gameRoom.currentPhotoIndex = 0;
   gameRoom.gameState = 'waiting';
   gameRoom.currentRound = 0;
 
-  // Reset all player scores and photo counts
   gameRoom.players.forEach((player) => {
     player.photosUploaded = 0;
     player.score = 0;
     player.streak = 0;
   });
 
-  // Reset scores map
   gameRoom.scores.clear();
   gameRoom.players.forEach((player) => {
     gameRoom.scores.set(player.id, 0);
@@ -736,7 +317,6 @@ app.post('/api/reset-game', generalLimiter, (req, res) => {
 
   console.log(`Game reset in room ${roomCode} by host ${playerId}`);
 
-  // Broadcast reset to all players in the room
   const fullGameState = {
     gameState: gameRoom.gameState,
     players: Array.from(gameRoom.players.values()).map(p => ({
@@ -751,16 +331,20 @@ app.post('/api/reset-game', generalLimiter, (req, res) => {
   };
 
   io.to(roomCode.toUpperCase()).emit('gameReset', fullGameState);
-
   res.json({ message: 'Game reset successfully' });
 });
 
-// Helper function to show photo results
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+});
+
+// ===== HELPER FUNCTIONS =====
+
 function showPhotoResults(gameRoom) {
   const currentPhoto = gameRoom.getCurrentPhoto();
   const correctPlayer = gameRoom.players.get(currentPhoto.playerId);
 
-  // Award time bonuses to top 3 fastest correct answers BEFORE showing results
   gameRoom.awardTimeBonuses();
 
   io.to(gameRoom.roomCode).emit('photoResults', {
@@ -780,52 +364,39 @@ function showPhotoResults(gameRoom) {
     leaderboard: gameRoom.getLeaderboard()
   });
 
-  // Move to next photo after showing results
   gameRoom.resultsTimer = setTimeout(() => {
     if (gameRoom.nextPhoto()) {
       showNextPhoto(gameRoom);
     } else {
       gameRoom.gameState = 'finished';
       const finalLeaderboard = gameRoom.getLeaderboard();
-      console.log(`Game finished in room ${gameRoom.roomCode}. Sending final results to all players:`, finalLeaderboard);
+      console.log(`Game finished in room ${gameRoom.roomCode}. Final results:`, finalLeaderboard);
 
-      // Emit to all players in the room
       io.to(gameRoom.roomCode).emit('gameFinished', {
         leaderboard: finalLeaderboard
       });
 
-      // Also emit directly to each player's socket as backup
       gameRoom.players.forEach((player) => {
         const socket = io.sockets.sockets.get(player.socketId);
         if (socket) {
-          console.log(`Sending gameFinished to player ${player.name} (${player.id})`);
-          socket.emit('gameFinished', {
-            leaderboard: finalLeaderboard
-          });
-        } else {
-          console.log(`Could not find socket for player ${player.name} (${player.id})`);
+          socket.emit('gameFinished', { leaderboard: finalLeaderboard });
         }
       });
 
-      // Schedule room cleanup after 10 minutes of inactivity
+      // Schedule cleanup after 10 minutes
       gameRoom.cleanupTimer = setTimeout(async () => {
         console.log(`Cleaning up room ${gameRoom.roomCode} after game finished`);
-
-        // Clean up all photos before deleting room
         await fileCleanupService.cleanupGamePhotos(gameRoom);
-
         gameRooms.delete(gameRoom.roomCode);
         console.log(`Total active rooms: ${gameRooms.size}`);
-      }, 10 * 60 * 1000); // 10 minutes
+      }, 10 * 60 * 1000);
     }
-  }, 5000); // Show results for 5 seconds
+  }, 5000);
 }
 
-// Helper function to show next photo
 function showNextPhoto(gameRoom) {
   const currentPhoto = gameRoom.getCurrentPhoto();
   if (!currentPhoto) {
-    // Game finished
     gameRoom.gameState = 'finished';
     io.to(gameRoom.roomCode).emit('gameFinished', {
       leaderboard: gameRoom.getLeaderboard()
@@ -833,9 +404,8 @@ function showNextPhoto(gameRoom) {
     return;
   }
 
-  // Send photo to all players
   io.to(gameRoom.roomCode).emit('newPhoto', {
-    photoUrl: currentPhoto.path, // Now stores full URL (either local or Cloudinary)
+    photoUrl: currentPhoto.path,
     photoIndex: gameRoom.currentPhotoIndex + 1,
     totalPhotos: gameRoom.photos.length,
     players: Array.from(gameRoom.players.values()).map(p => ({
@@ -844,20 +414,19 @@ function showNextPhoto(gameRoom) {
     }))
   });
 
-  // Set timer for round - will be cleared if all players submit early
   gameRoom.roundTimer = setTimeout(() => {
     showPhotoResults(gameRoom);
   }, gameRoom.gameSettings.roundTime * 1000);
 }
 
-// Socket.io connection handling
+// ===== SOCKET.IO CONNECTION HANDLING =====
+
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
-  
+
   socket.on('joinRoom', ({ roomCode, playerId, playerName, isHost }) => {
     const gameRoom = gameRooms.get(roomCode?.toUpperCase());
     if (gameRoom) {
-      // Sanitize player name to prevent XSS
       const sanitizedName = sanitizePlayerName(playerName);
 
       if (!sanitizedName || sanitizedName.length < 2) {
@@ -865,15 +434,11 @@ io.on('connection', (socket) => {
         return;
       }
 
-      // Check if this player already exists (reconnection)
       const isReconnection = gameRoom.players.has(playerId);
-
       gameRoom.addPlayer(playerId, sanitizedName, socket.id, isHost || false);
       playerSockets.set(socket.id, { playerId, roomCode: roomCode.toUpperCase() });
-
       socket.join(roomCode.toUpperCase());
 
-      // Only notify about new player if it's NOT a reconnection
       if (!isReconnection) {
         socket.to(roomCode.toUpperCase()).emit('playerJoined', {
           playerName,
@@ -883,7 +448,6 @@ io.on('connection', (socket) => {
         console.log(`Player ${playerName} reconnected to room ${roomCode.toUpperCase()}`);
       }
 
-      // Prepare full game state
       const fullGameState = {
         gameState: gameRoom.gameState,
         players: Array.from(gameRoom.players.values()).map(p => ({
@@ -897,10 +461,8 @@ io.on('connection', (socket) => {
         hostId: gameRoom.hostId
       };
 
-      // Send current game state to the player (new or reconnecting)
       socket.emit('gameState', fullGameState);
 
-      // If reconnecting during an active game, send the current photo
       if (isReconnection && gameRoom.gameState === 'playing') {
         const currentPhoto = gameRoom.getCurrentPhoto();
         if (currentPhoto) {
@@ -916,11 +478,10 @@ io.on('connection', (socket) => {
         }
       }
 
-      // Broadcast updated state to all other players in the room
       socket.to(roomCode.toUpperCase()).emit('gameState', fullGameState);
     }
   });
-  
+
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
 
@@ -932,43 +493,33 @@ io.on('connection', (socket) => {
         if (player) {
           const wasHost = player.isHost;
 
-          // During waiting phase, keep player data to allow reconnection
-          // Only remove player if game is in progress or finished
           if (gameRoom.gameState === 'waiting' || gameRoom.gameState === 'uploading') {
-            // Keep player in the game but mark them as disconnected
-            console.log(`Player ${player.name} disconnected from room ${playerInfo.roomCode} (waiting phase - data preserved for reconnection)`);
+            console.log(`Player ${player.name} disconnected from room ${playerInfo.roomCode} (waiting phase)`);
 
-            // If host disconnects during waiting, reassign host immediately
             if (wasHost && gameRoom.players.size > 1) {
-              // Find a connected player to be the new host
               for (const [pid, p] of gameRoom.players.entries()) {
                 if (pid !== playerInfo.playerId && playerSockets.has(p.socketId)) {
                   gameRoom.hostId = pid;
                   p.isHost = true;
                   player.isHost = false;
-                  console.log(`Host reassigned to ${p.name} (${pid}) while in waiting phase`);
+                  console.log(`Host reassigned to ${p.name} (${pid})`);
                   break;
                 }
               }
             }
 
-            // Notify others that player left (but they can rejoin)
             socket.to(playerInfo.roomCode).emit('playerLeft', {
               playerName: player.name,
               totalPlayers: gameRoom.players.size
             });
           } else {
-            // During active game, remove the player
             gameRoom.removePlayer(playerInfo.playerId);
-
-            // Notify room about player leaving
             socket.to(playerInfo.roomCode).emit('playerLeft', {
               playerName: player.name,
               totalPlayers: gameRoom.players.size
             });
           }
 
-          // If the host left, broadcast updated game state with new host
           if (wasHost && gameRoom.players.size > 0) {
             const fullGameState = {
               gameState: gameRoom.gameState,
@@ -985,15 +536,11 @@ io.on('connection', (socket) => {
             io.to(playerInfo.roomCode).emit('gameState', fullGameState);
           }
 
-          // Clean up empty rooms
           if (gameRoom.players.size === 0) {
-            console.log(`Room ${playerInfo.roomCode} is empty, cleaning up photos and deleting room`);
-
-            // Clean up photos asynchronously (don't block disconnect)
+            console.log(`Room ${playerInfo.roomCode} is empty, cleaning up`);
             fileCleanupService.cleanupGamePhotos(gameRoom).catch(err => {
               console.error('Error cleaning up photos on room deletion:', err);
             });
-
             gameRooms.delete(playerInfo.roomCode);
           }
         }
@@ -1003,11 +550,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
-});
-
 // Serve React app for all other routes in production
 if (process.env.NODE_ENV === 'production') {
   app.get('*', (req, res) => {
@@ -1015,6 +557,7 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
+// Start server
 server.listen(PORT, () => {
   console.log(`Photo Blender server running on port ${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
@@ -1026,12 +569,12 @@ setInterval(() => {
   fileCleanupService.cleanupOrphanedFiles().catch(err => {
     console.error('Error in scheduled orphaned file cleanup:', err);
   });
-}, 6 * 60 * 60 * 1000); // 6 hours
+}, 6 * 60 * 60 * 1000);
 
-// Run initial orphaned file cleanup after 5 minutes of server start
+// Run initial cleanup after 5 minutes
 setTimeout(() => {
   console.log('Running initial orphaned file cleanup...');
   fileCleanupService.cleanupOrphanedFiles().catch(err => {
     console.error('Error in initial orphaned file cleanup:', err);
   });
-}, 5 * 60 * 1000); // 5 minutes
+}, 5 * 60 * 1000);
