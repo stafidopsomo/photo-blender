@@ -6,6 +6,7 @@ import './index.css';
 import TutorialPopup from './TutorialPopup';
 import PrivacyPopup from './PrivacyPopup';
 import FloatingLeaderboard from './FloatingLeaderboard';
+import { sounds, haptics } from './utils/sounds';
 
 // Types
 interface Player {
@@ -173,6 +174,8 @@ function App() {
         setCurrentView('game');
         setGameState(prev => ({ ...prev, gameState: 'playing' }));
         setSuccess('Game started! Get ready...');
+        sounds.notification();
+        haptics.medium();
         setTimeout(() => setSuccess(''), 3000);
       });
 
@@ -188,6 +191,15 @@ function App() {
 
       newSocket.on('photoResults', (data: PhotoResults) => {
         setPhotoResults(data);
+        // Play sound based on if current player got it right
+        const myGuess = data.guesses.find(g => g.guesser === playerName);
+        if (myGuess?.correct) {
+          sounds.success();
+          haptics.success();
+        } else if (myGuess) {
+          sounds.error();
+          haptics.error();
+        }
         setTimeout(() => {
           setPhotoResults(null);
         }, 5000);
@@ -198,6 +210,10 @@ function App() {
 
         // Go straight to results
         setCurrentView('results');
+
+        // Play victory sound
+        sounds.gameFinish();
+        haptics.success();
 
         // Store leaderboard
         setPhotoResults({
@@ -377,6 +393,8 @@ function App() {
 
       if (!skipLoadingState) {
         setSuccess('Photo uploaded successfully!');
+        sounds.notification();
+        haptics.light();
         setTimeout(() => setSuccess(''), 3000);
       }
     } catch (err: any) {
@@ -591,10 +609,15 @@ function App() {
             display: 'flex',
             gap: '8px',
             justifyContent: 'center',
-            marginTop: '12px'
+            marginTop: '12px',
+            flexWrap: 'wrap'
           }}>
             <button
-              onClick={() => setShowTutorial(true)}
+              onClick={() => {
+                setShowTutorial(true);
+                sounds.click();
+                haptics.light();
+              }}
               style={{
                 background: 'rgba(255, 255, 255, 0.1)',
                 border: '1px solid rgba(255, 255, 255, 0.2)',
@@ -609,7 +632,11 @@ function App() {
               ❓ How to Play
             </button>
             <button
-              onClick={() => setShowPrivacyPopup(true)}
+              onClick={() => {
+                setShowPrivacyPopup(true);
+                sounds.click();
+                haptics.light();
+              }}
               style={{
                 background: 'rgba(255, 255, 255, 0.1)',
                 border: '1px solid rgba(255, 255, 255, 0.2)',
@@ -622,6 +649,28 @@ function App() {
               }}
             >
               🔒 Privacy
+            </button>
+            <button
+              onClick={() => {
+                sounds.setMuted(!sounds.getMuted());
+                sounds.click();
+                haptics.light();
+                setSuccess(sounds.getMuted() ? 'Sounds muted' : 'Sounds enabled');
+                setTimeout(() => setSuccess(''), 2000);
+              }}
+              style={{
+                background: 'rgba(255, 255, 255, 0.1)',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                borderRadius: '8px',
+                padding: '8px 16px',
+                color: 'white',
+                fontSize: '0.85rem',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease'
+              }}
+              title={sounds.getMuted() ? 'Enable sounds' : 'Mute sounds'}
+            >
+              {sounds.getMuted() ? '🔇' : '🔊'}
             </button>
           </div>
         </div>
