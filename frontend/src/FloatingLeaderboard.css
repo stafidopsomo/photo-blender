@@ -1,55 +1,58 @@
 /* Floating Leaderboard Container */
 .floating-leaderboard {
   position: fixed;
-  bottom: 20px;
-  right: 20px;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 1001;
-  animation: slideUp 0.4s ease;
+  animation: slideDown 0.5s ease;
 }
 
-@keyframes slideUp {
+@keyframes slideDown {
   from {
     opacity: 0;
-    transform: translateY(20px);
+    transform: translateX(-50%) translateY(-30px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateX(-50%) translateY(0);
   }
 }
 
-/* Minimized State */
-.floating-leaderboard.minimized .leaderboard-content {
-  display: none;
+/* Fade out animation */
+.floating-leaderboard.fading-out {
+  animation: fadeOut 0.5s ease forwards;
 }
 
-.floating-leaderboard.minimized .floating-leaderboard-card {
-  width: auto;
-  padding: 12px 20px;
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
 
 /* Leaderboard Card */
 .floating-leaderboard-card {
-  background: rgba(20, 20, 30, 0.95);
-  backdrop-filter: blur(15px);
+  background: rgba(20, 20, 30, 0.92);
+  backdrop-filter: blur(20px);
   border-radius: 16px;
-  border: 2px solid rgba(102, 126, 234, 0.4);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  border: 2px solid rgba(102, 126, 234, 0.5);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
   overflow: hidden;
   transition: all 0.3s ease;
-  max-width: 300px;
-  min-width: 250px;
+  max-width: 350px;
+  min-width: 300px;
 }
 
 /* Header */
 .leaderboard-header {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
-  padding: 16px;
+  padding: 12px 16px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  cursor: pointer;
-  user-select: none;
 }
 
 .leaderboard-title {
@@ -225,9 +228,10 @@
 /* Mobile Responsive */
 @media (max-width: 768px) {
   .floating-leaderboard {
-    bottom: 10px;
-    right: 10px;
+    top: 60px;
     left: 10px;
+    right: 10px;
+    transform: none;
   }
 
   .floating-leaderboard-card {
@@ -236,17 +240,11 @@
   }
 
   .leaderboard-header {
-    padding: 12px;
+    padding: 10px 12px;
   }
 
   .leaderboard-title {
     font-size: 14px;
-  }
-
-  .control-btn {
-    width: 24px;
-    height: 24px;
-    font-size: 12px;
   }
 
   .leaderboard-content {
@@ -274,7 +272,7 @@
 
 @media (max-width: 480px) {
   .floating-leaderboard {
-    bottom: 60px;
+    top: 50px;
   }
 
   .floating-leaderboard-item {

@@ -5,8 +5,6 @@ import DOMPurify from 'dompurify';
 import './index.css';
 import TutorialPopup from './TutorialPopup';
 import PrivacyPopup from './PrivacyPopup';
-import LiveRoomBadge from './LiveRoomBadge';
-import PhotoDeletionAnimation from './PhotoDeletionAnimation';
 import FloatingLeaderboard from './FloatingLeaderboard';
 
 // Types
@@ -86,9 +84,6 @@ function App() {
   const [showPlayersList, setShowPlayersList] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showPrivacyPopup, setShowPrivacyPopup] = useState(false);
-  const [showDeletionAnimation, setShowDeletionAnimation] = useState(false);
-  const [photosToDelete, setPhotosToDelete] = useState<string[]>([]);
-  const [showFloatingLeaderboard, setShowFloatingLeaderboard] = useState(true);
 
   // Check URL for room code on mount
   useEffect(() => {
@@ -189,7 +184,6 @@ function App() {
         setTimeRemaining(30);
         setHasSubmittedGuess(false);
         setPhotoStartTime(Date.now());
-        setShowFloatingLeaderboard(true); // Reset visibility for new round
       });
 
       newSocket.on('photoResults', (data: PhotoResults) => {
@@ -199,22 +193,13 @@ function App() {
         }, 5000);
       });
 
-      newSocket.on('gameFinished', (data: { leaderboard: Array<{ name: string; score: number }>; photos?: string[] }) => {
+      newSocket.on('gameFinished', (data: { leaderboard: Array<{ name: string; score: number }> }) => {
         console.log('Game finished event received', data);
 
-        // Collect uploaded photos for deletion animation
-        const allPhotos = uploadedPhotos.length > 0 ? uploadedPhotos : (data.photos || []);
+        // Go straight to results
+        setCurrentView('results');
 
-        if (allPhotos.length > 0) {
-          // Show deletion animation first
-          setPhotosToDelete(allPhotos);
-          setShowDeletionAnimation(true);
-        } else {
-          // No photos to animate, go straight to results
-          setCurrentView('results');
-        }
-
-        // Store leaderboard for after animation
+        // Store leaderboard
         setPhotoResults({
           correctPlayer: '',
           correctPlayerId: '',
@@ -591,31 +576,10 @@ function App() {
     }
   };
 
-  // Handle deletion animation completion
-  const handleDeletionComplete = () => {
-    setShowDeletionAnimation(false);
-    setPhotosToDelete([]);
-    setCurrentView('results');
-  };
-
   return (
     <div className="app">
       {showTutorial && <TutorialPopup onClose={() => setShowTutorial(false)} />}
       {showPrivacyPopup && <PrivacyPopup onClose={() => setShowPrivacyPopup(false)} />}
-      {showDeletionAnimation && (
-        <PhotoDeletionAnimation
-          photos={photosToDelete}
-          onComplete={handleDeletionComplete}
-        />
-      )}
-
-      {/* Live Room Badge - visible when in a room */}
-      {(currentView === 'waiting' || currentView === 'game' || currentView === 'results') && (
-        <LiveRoomBadge
-          gameState={gameState.gameState}
-          isVisible={roomCode !== ''}
-        />
-      )}
 
       <div className="container">
         <div className="header">
@@ -1063,37 +1027,13 @@ function App() {
                     </div>
                   ))}
                 </div>
-
-                <div className="leaderboard results-container">
-                  <h4 style={{
-                    fontSize: window.innerWidth <= 768 ? '1rem' : '1.2rem',
-                    marginBottom: window.innerWidth <= 768 ? '12px' : '16px'
-                  }}>
-                    📊 Leaderboard
-                  </h4>
-                  {photoResults.leaderboard.map((player, index) => (
-                    <div key={index} className="leaderboard-item">
-                      <span className="rank">#{index + 1}</span>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px', flex: 1 }}>
-                        {player.name}
-                        {player.streak && player.streak >= 3 && (
-                          <span className="streak-badge">
-                            🔥 {player.streak}
-                          </span>
-                        )}
-                      </span>
-                      <span style={{ fontWeight: '700', fontSize: '1.1rem' }}>{player.score} pts</span>
-                    </div>
-                  ))}
-                </div>
               </div>
             )}
 
             {/* Floating Leaderboard during game */}
-            {showFloatingLeaderboard && photoResults && photoResults.leaderboard && (
+            {photoResults && photoResults.leaderboard && (
               <FloatingLeaderboard
                 players={photoResults.leaderboard}
-                onClose={() => setShowFloatingLeaderboard(false)}
               />
             )}
           </div>

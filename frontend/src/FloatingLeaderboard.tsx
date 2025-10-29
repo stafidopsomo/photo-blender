@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import './FloatingLeaderboard.css';
 
 interface LeaderboardPlayer {
@@ -9,11 +9,21 @@ interface LeaderboardPlayer {
 
 interface FloatingLeaderboardProps {
   players: LeaderboardPlayer[];
-  onClose?: () => void;
 }
 
-const FloatingLeaderboard: React.FC<FloatingLeaderboardProps> = ({ players, onClose }) => {
-  const [isMinimized, setIsMinimized] = useState(false);
+const FloatingLeaderboard: React.FC<FloatingLeaderboardProps> = ({ players }) => {
+  const [isFadingOut, setIsFadingOut] = useState(false);
+
+  useEffect(() => {
+    // Auto-hide after 4 seconds
+    const fadeTimer = setTimeout(() => {
+      setIsFadingOut(true);
+    }, 4000);
+
+    return () => {
+      clearTimeout(fadeTimer);
+    };
+  }, []);
 
   const getRankDisplay = (index: number): string => {
     if (index === 0) return '🥇';
@@ -29,46 +39,18 @@ const FloatingLeaderboard: React.FC<FloatingLeaderboardProps> = ({ players, onCl
     return '';
   };
 
-  const toggleMinimize = () => {
-    setIsMinimized(!isMinimized);
-  };
-
   return (
-    <div className={`floating-leaderboard ${isMinimized ? 'minimized' : ''}`}>
+    <div className={`floating-leaderboard ${isFadingOut ? 'fading-out' : ''}`}>
       <div className="floating-leaderboard-card">
-        <div className="leaderboard-header" onClick={toggleMinimize}>
+        <div className="leaderboard-header">
           <h3 className="leaderboard-title">
             <span>📊</span>
             <span>Leaderboard</span>
           </h3>
-          <div className="leaderboard-controls">
-            <button
-              className="control-btn"
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleMinimize();
-              }}
-              aria-label={isMinimized ? 'Expand' : 'Minimize'}
-            >
-              {isMinimized ? '▲' : '▼'}
-            </button>
-            {onClose && (
-              <button
-                className="control-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onClose();
-                }}
-                aria-label="Close"
-              >
-                ×
-              </button>
-            )}
-          </div>
         </div>
 
         <div className="leaderboard-content">
-          {players.map((player, index) => (
+          {players.slice(0, 5).map((player, index) => (
             <div
               key={`${player.name}-${index}`}
               className="floating-leaderboard-item"
