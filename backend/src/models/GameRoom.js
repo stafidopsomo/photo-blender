@@ -1,4 +1,5 @@
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 
 /**
  * GameRoom class manages the state and logic for a single game room
@@ -18,6 +19,7 @@ class GameRoom {
     this.cleanupTimer = null; // Timer to cleanup room after game ends
     this.gameFinishedTime = null; // Track when game finished for reset delay
     this.hostId = null; // Track the host player ID
+    this.totalUploadSize = 0; // Track total upload size for the room in bytes
     this.gameSettings = {
       maxPlayers: 8,
       roundTime: 30, // seconds
@@ -48,6 +50,7 @@ class GameRoom {
       name: playerName,
       socketId: socketId,
       photosUploaded: 0,
+      totalUploadSize: 0, // Track total upload size per player in bytes
       score: 0,
       streak: 0,
       isHost: playerId === this.hostId
@@ -66,23 +69,27 @@ class GameRoom {
     }
   }
 
-  addPhoto(playerId, photoPath) {
+  addPhoto(playerId, photoPath, fileSize = 0) {
     this.photos.push({
       id: uuidv4(),
       playerId: playerId,
       path: photoPath,
+      fileSize: fileSize,
       guesses: new Map()
     });
 
     const player = this.players.get(playerId);
     if (player) {
       player.photosUploaded++;
+      player.totalUploadSize += fileSize;
     }
+    this.totalUploadSize += fileSize;
   }
 
   shufflePhotos() {
+    // Use cryptographically secure random for photo shuffling
     for (let i = this.photos.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = crypto.randomInt(0, i + 1);
       [this.photos[i], this.photos[j]] = [this.photos[j], this.photos[i]];
     }
   }

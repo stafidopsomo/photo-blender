@@ -2,10 +2,13 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
+const helmet = require('helmet');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const sharp = require('sharp');
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 require('dotenv').config();
 
 // Import refactored modules
@@ -19,12 +22,30 @@ const FileCleanupService = require('./src/services/FileCleanupService');
 // Configure Cloudinary (with production validation)
 configureCloudinary();
 
+// JWT Secret for WebSocket authentication
+// In production, this MUST be set in environment variables
+const JWT_SECRET = process.env.JWT_SECRET ||
+  (process.env.NODE_ENV === 'production'
+    ? (() => { throw new Error('JWT_SECRET environment variable must be set in production'); })()
+    : crypto.randomBytes(64).toString('hex')); // Auto-generate for dev
+
+console.log('JWT authentication configured');
+
+// Validate FRONTEND_URL in production
+const FRONTEND_URL = process.env.FRONTEND_URL ||
+  (process.env.NODE_ENV === 'production'
+    ? (() => { throw new Error('FRONTEND_URL environment variable must be set in production'); })()
+    : "http://localhost:3000");
+
+console.log(`CORS configured for origin: ${FRONTEND_URL}`);
+
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
-    methods: ["GET", "POST"]
+    origin: FRONTEND_URL,
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 
@@ -35,7 +56,29 @@ const PORT = process.env.PORT || 5000;
 app.set('trust proxy', 1);
 
 // Middleware
-app.use(cors());
+// Security headers with Helmet.js
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"], // Allow inline styles for React
+      imgSrc: ["'self'", "data:", "https://res.cloudinary.com"], // Allow Cloudinary images
+      connectSrc: ["'self'", FRONTEND_URL], // Allow WebSocket connections
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"]
+    }
+  },
+  crossOriginEmbedderPolicy: false, // Disable for compatibility
+  crossOriginResourcePolicy: { policy: "cross-origin" } // Allow cross-origin resources
+}));
+
+app.use(cors({
+  origin: FRONTEND_URL,
+  credentials: true
+}));
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
@@ -65,20 +108,26 @@ const fileCleanupService = new FileCleanupService(uploadsDir, gameRooms);
 // Create a new game room
 app.post('/api/create-room', createRoomLimiter, (req, res) => {
   let roomCode;
+  let gameRoom;
   let attempts = 0;
   const MAX_ATTEMPTS = 10;
 
-  do {
+  // Atomically generate and reserve room code to prevent race conditions
+  while (attempts < MAX_ATTEMPTS) {
     roomCode = generateRoomCode();
     attempts++;
-    if (attempts >= MAX_ATTEMPTS) {
-      return res.status(500).json({ error: 'Failed to generate unique room code. Please try again.' });
-    }
-  } while (gameRooms.has(roomCode));
 
-  // Immediately reserve this code
-  const gameRoom = new GameRoom(roomCode);
-  gameRooms.set(roomCode, gameRoom);
+    // Atomically check and set to prevent race condition
+    if (!gameRooms.has(roomCode)) {
+      gameRoom = new GameRoom(roomCode);
+      gameRooms.set(roomCode, gameRoom);
+      break;
+    }
+  }
+
+  if (!gameRoom) {
+    return res.status(500).json({ error: 'Failed to generate unique room code. Please try again.' });
+  }
 
   console.log(`Room created: ${roomCode}, Total rooms: ${gameRooms.size}`);
   res.json({ roomCode });
@@ -122,12 +171,24 @@ app.post('/api/join-room', generalLimiter, (req, res) => {
     gameRoom.hostId = playerId;
   }
 
+  // Generate JWT token for WebSocket authentication
+  const token = jwt.sign(
+    {
+      playerId,
+      roomCode: gameRoom.roomCode,
+      playerName: sanitizedName
+    },
+    JWT_SECRET,
+    { expiresIn: '24h' } // Token expires in 24 hours
+  );
+
   res.json({
     playerId,
     roomCode: gameRoom.roomCode,
     gameState: gameRoom.gameState,
     isHost,
-    sanitizedName
+    sanitizedName,
+    token // Send token to client for WebSocket authentication
   });
 });
 
@@ -150,10 +211,30 @@ app.post('/api/upload-photo', uploadLimiter, upload.single('photo'), async (req,
       return res.status(404).json({ error: 'Player not found in room' });
     }
 
+    // Upload limits to prevent DoS attacks
     const MAX_PHOTOS_PER_PLAYER = 20;
+    const MAX_UPLOAD_SIZE_PER_PLAYER = 100 * 1024 * 1024; // 100MB per player
+    const MAX_UPLOAD_SIZE_PER_ROOM = 500 * 1024 * 1024; // 500MB per room
+
     if (player.photosUploaded >= MAX_PHOTOS_PER_PLAYER) {
       fs.unlinkSync(req.file.path);
       return res.status(400).json({ error: `Maximum ${MAX_PHOTOS_PER_PLAYER} photos per player` });
+    }
+
+    // Check player upload size limit
+    if (player.totalUploadSize + req.file.size > MAX_UPLOAD_SIZE_PER_PLAYER) {
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({
+        error: `Total upload size limit exceeded. Maximum ${MAX_UPLOAD_SIZE_PER_PLAYER / (1024 * 1024)}MB per player`
+      });
+    }
+
+    // Check room upload size limit
+    if (gameRoom.totalUploadSize + req.file.size > MAX_UPLOAD_SIZE_PER_ROOM) {
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({
+        error: `Room upload limit exceeded. Maximum ${MAX_UPLOAD_SIZE_PER_ROOM / (1024 * 1024)}MB per room`
+      });
     }
 
     // Compress, resize, and strip EXIF metadata for privacy
@@ -166,6 +247,10 @@ app.post('/api/upload-photo', uploadLimiter, upload.single('photo'), async (req,
       .toFile(compressedPath);
 
     fs.unlinkSync(req.file.path);
+
+    // Get compressed file size for tracking
+    const compressedStats = fs.statSync(compressedPath);
+    const compressedSize = compressedStats.size;
 
     // Upload to Cloudinary
     let photoUrl = `/uploads/${path.basename(compressedPath)}`;
@@ -187,7 +272,7 @@ app.post('/api/upload-photo', uploadLimiter, upload.single('photo'), async (req,
       }
     }
 
-    gameRoom.addPhoto(playerId, photoUrl);
+    gameRoom.addPhoto(playerId, photoUrl, compressedSize);
 
     io.to(roomCode.toUpperCase()).emit('photoUploaded', {
       playerName: player.name,
@@ -260,8 +345,14 @@ app.post('/api/submit-guess', guessLimiter, (req, res) => {
   const { roomCode, playerId, guessedPlayerId, timeToAnswer } = req.body;
 
   const gameRoom = gameRooms.get(roomCode?.toUpperCase());
+
   if (!gameRoom) {
     return res.status(404).json({ error: 'Room not found' });
+  }
+
+  // Validate playerId belongs to this room
+  if (!playerId || !gameRoom.players.has(playerId)) {
+    return res.status(403).json({ error: 'Invalid player or player not in room' });
   }
 
   gameRoom.submitGuess(playerId, guessedPlayerId, timeToAnswer || 30);
@@ -439,23 +530,74 @@ function showNextPhoto(gameRoom) {
 
 // ===== SOCKET.IO CONNECTION HANDLING =====
 
+/**
+ * WebSocket Authentication System
+ *
+ * Security: All WebSocket connections must be authenticated using JWT tokens
+ *
+ * Flow:
+ * 1. Client joins room via POST /api/join-room
+ * 2. Server generates JWT token with playerId, roomCode, playerName
+ * 3. Client receives token and uses it to connect to WebSocket
+ * 4. Server validates token and attaches verified info to socket
+ * 5. All socket events validate that client data matches authenticated data
+ *
+ * This prevents:
+ * - Impersonation attacks (can't fake playerId)
+ * - Unauthorized room access
+ * - Manipulation of game state by non-players
+ */
+
+// WebSocket authentication middleware
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+
+  if (!token) {
+    return next(new Error('Authentication token required'));
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    // Attach verified player info to socket
+    socket.playerId = decoded.playerId;
+    socket.roomCode = decoded.roomCode;
+    socket.playerName = decoded.playerName;
+    next();
+  } catch (err) {
+    console.error('WebSocket authentication failed:', err.message);
+    return next(new Error('Invalid or expired token'));
+  }
+});
+
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+  console.log(`User connected: ${socket.id} (Player: ${socket.playerName}, Room: ${socket.roomCode})`);
 
   socket.on('joinRoom', ({ roomCode, playerId, playerName, isHost }) => {
-    const gameRoom = gameRooms.get(roomCode?.toUpperCase());
+    // Validate that client's playerId matches authenticated playerId
+    if (playerId !== socket.playerId) {
+      socket.emit('error', { message: 'PlayerId mismatch - authentication failed' });
+      return;
+    }
+
+    // Validate that client's roomCode matches authenticated roomCode
+    if (roomCode?.toUpperCase() !== socket.roomCode) {
+      socket.emit('error', { message: 'RoomCode mismatch - authentication failed' });
+      return;
+    }
+
+    const gameRoom = gameRooms.get(socket.roomCode);
     if (gameRoom) {
-      const sanitizedName = sanitizePlayerName(playerName);
+      const sanitizedName = sanitizePlayerName(socket.playerName); // Use authenticated playerName
 
       if (!sanitizedName || sanitizedName.length < 2) {
         socket.emit('error', { message: 'Invalid player name' });
         return;
       }
 
-      const isReconnection = gameRoom.players.has(playerId);
-      gameRoom.addPlayer(playerId, sanitizedName, socket.id, isHost || false);
-      playerSockets.set(socket.id, { playerId, roomCode: roomCode.toUpperCase() });
-      socket.join(roomCode.toUpperCase());
+      const isReconnection = gameRoom.players.has(socket.playerId);
+      gameRoom.addPlayer(socket.playerId, sanitizedName, socket.id, isHost || false);
+      playerSockets.set(socket.id, { playerId: socket.playerId, roomCode: socket.roomCode });
+      socket.join(socket.roomCode);
 
       if (!isReconnection) {
         socket.to(roomCode.toUpperCase()).emit('playerJoined', {
