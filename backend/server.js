@@ -31,19 +31,25 @@ const JWT_SECRET = process.env.JWT_SECRET ||
 
 console.log('JWT authentication configured');
 
-// Validate FRONTEND_URL in production
+// FRONTEND_URL configuration
+// In production on Render.com, frontend and backend are served from same origin,
+// so FRONTEND_URL is optional. If not set, we'll allow same-origin requests.
 const FRONTEND_URL = process.env.FRONTEND_URL ||
   (process.env.NODE_ENV === 'production'
-    ? (() => { throw new Error('FRONTEND_URL environment variable must be set in production'); })()
+    ? null  // In production without FRONTEND_URL, allow same-origin only
     : "http://localhost:3000");
 
-console.log(`CORS configured for origin: ${FRONTEND_URL}`);
+if (FRONTEND_URL) {
+  console.log(`CORS configured for origin: ${FRONTEND_URL}`);
+} else {
+  console.log('CORS configured for same-origin (production mode)');
+}
 
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: FRONTEND_URL,
+    origin: FRONTEND_URL || true,  // Allow same-origin in production if FRONTEND_URL not set
     methods: ["GET", "POST"],
     credentials: true
   }
@@ -61,10 +67,10 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"], // Allow inline scripts for React (CRA uses inline scripts)
       styleSrc: ["'self'", "'unsafe-inline'"], // Allow inline styles for React
       imgSrc: ["'self'", "data:", "https://res.cloudinary.com"], // Allow Cloudinary images
-      connectSrc: ["'self'", FRONTEND_URL], // Allow WebSocket connections
+      connectSrc: ["'self'"], // Allow WebSocket connections to same origin
       fontSrc: ["'self'"],
       objectSrc: ["'none'"],
       mediaSrc: ["'self'"],
@@ -76,7 +82,7 @@ app.use(helmet({
 }));
 
 app.use(cors({
-  origin: FRONTEND_URL,
+  origin: FRONTEND_URL || true,  // Allow same-origin in production if FRONTEND_URL not set
   credentials: true
 }));
 app.use(express.json());

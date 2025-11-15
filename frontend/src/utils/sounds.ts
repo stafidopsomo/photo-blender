@@ -22,12 +22,17 @@ class SoundEffects {
 
   setMuted(muted: boolean) {
     this.isMuted = muted;
-    localStorage.setItem('soundsMuted', muted.toString());
+    if (typeof window !== 'undefined' && window.localStorage) {
+      localStorage.setItem('soundsMuted', muted.toString());
+    }
   }
 
   getMuted(): boolean {
-    const stored = localStorage.getItem('soundsMuted');
-    return stored === 'true';
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const stored = localStorage.getItem('soundsMuted');
+      return stored === 'true';
+    }
+    return false;
   }
 
   private playTone(frequency: number, duration: number, type: OscillatorType = 'sine', volume: number = 0.3) {

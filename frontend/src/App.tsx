@@ -63,6 +63,7 @@ function App() {
   const [playerName, setPlayerName] = useState('');
   const [roomCode, setRoomCode] = useState('');
   const [playerId, setPlayerId] = useState('');
+  const [authToken, setAuthToken] = useState<string>('');
   const [gameState, setGameState] = useState<GameState>({
     gameState: 'waiting',
     players: [],
@@ -100,10 +101,11 @@ function App() {
       if (savedSession) {
         try {
           const session = JSON.parse(savedSession);
-          if (session.roomCode === urlRoomCode && session.playerId && session.playerName) {
+          if (session.roomCode === urlRoomCode && session.playerId && session.playerName && session.authToken) {
             // Auto-rejoin if URL matches saved session
             setPlayerName(session.playerName);
             setPlayerId(session.playerId);
+            setAuthToken(session.authToken);
             setIsHost(session.isHost || false);
             setCurrentView('waiting');
             return;
@@ -137,8 +139,10 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (roomCode && playerId && playerName) {
-      const newSocket = io(API_BASE);
+    if (roomCode && playerId && playerName && authToken) {
+      const newSocket = io(API_BASE, {
+        auth: { token: authToken }
+      });
       setSocket(newSocket);
 
       newSocket.emit('joinRoom', { roomCode, playerId, playerName, isHost });
@@ -248,7 +252,7 @@ function App() {
         newSocket.disconnect();
       };
     }
-  }, [roomCode, playerId, playerName]);
+  }, [roomCode, playerId, playerName, authToken]);
 
   // Timer countdown effect
   useEffect(() => {
@@ -281,6 +285,7 @@ function App() {
 
       setRoomCode(newRoomCode);
       setPlayerId(joinResponse.data.playerId);
+      setAuthToken(joinResponse.data.token);
       setIsHost(joinResponse.data.isHost || true);
 
       // Use sanitized name from backend if provided
@@ -299,6 +304,7 @@ function App() {
         roomCode: newRoomCode,
         playerId: joinResponse.data.playerId,
         playerName: finalPlayerName,
+        authToken: joinResponse.data.token,
         isHost: true
       }));
     } catch (err: any) {
@@ -325,6 +331,7 @@ function App() {
 
       setPlayerId(response.data.playerId);
       setRoomCode(response.data.roomCode);
+      setAuthToken(response.data.token);
       setIsHost(response.data.isHost || false);
 
       // Use sanitized name from backend if provided
@@ -343,6 +350,7 @@ function App() {
         roomCode: response.data.roomCode,
         playerId: response.data.playerId,
         playerName: finalPlayerName,
+        authToken: response.data.token,
         isHost: response.data.isHost || false
       }));
     } catch (err: any) {
