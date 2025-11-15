@@ -89,6 +89,8 @@ function App() {
 
   // Check URL for room code on mount
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+
     const path = window.location.pathname;
     const urlRoomCode = path.replace('/', '').trim();
 
@@ -97,7 +99,7 @@ function App() {
       setRoomCode(urlRoomCode);
 
       // Check for saved session
-      const savedSession = localStorage.getItem('photoBlenderSession');
+      const savedSession = typeof localStorage !== 'undefined' ? localStorage.getItem('photoBlenderSession') : null;
       if (savedSession) {
         try {
           const session = JSON.parse(savedSession);
@@ -111,7 +113,9 @@ function App() {
             return;
           }
         } catch (e) {
-          localStorage.removeItem('photoBlenderSession');
+          if (typeof localStorage !== 'undefined') {
+            localStorage.removeItem('photoBlenderSession');
+          }
         }
       }
 
@@ -119,7 +123,7 @@ function App() {
       setCurrentView('join');
     } else {
       // No room code in URL - check for saved session
-      const savedSession = localStorage.getItem('photoBlenderSession');
+      const savedSession = typeof localStorage !== 'undefined' ? localStorage.getItem('photoBlenderSession') : null;
       if (savedSession) {
         try {
           const session = JSON.parse(savedSession);
@@ -132,7 +136,9 @@ function App() {
             setSuccess(`Found previous session in room ${session.roomCode}. Rejoin?`);
           }
         } catch (e) {
-          localStorage.removeItem('photoBlenderSession');
+          if (typeof localStorage !== 'undefined') {
+            localStorage.removeItem('photoBlenderSession');
+          }
         }
       }
     }
@@ -300,13 +306,15 @@ function App() {
       window.history.pushState({}, '', `/${newRoomCode}`);
 
       // Save session to localStorage for reconnection
-      localStorage.setItem('photoBlenderSession', JSON.stringify({
-        roomCode: newRoomCode,
-        playerId: joinResponse.data.playerId,
-        playerName: finalPlayerName,
-        authToken: joinResponse.data.token,
-        isHost: true
-      }));
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('photoBlenderSession', JSON.stringify({
+          roomCode: newRoomCode,
+          playerId: joinResponse.data.playerId,
+          playerName: finalPlayerName,
+          authToken: joinResponse.data.token,
+          isHost: true
+        }));
+      }
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to create room');
     } finally {
@@ -346,13 +354,15 @@ function App() {
 
       // Save session to localStorage for reconnection
       const finalPlayerName = response.data.sanitizedName || playerName.trim();
-      localStorage.setItem('photoBlenderSession', JSON.stringify({
-        roomCode: response.data.roomCode,
-        playerId: response.data.playerId,
-        playerName: finalPlayerName,
-        authToken: response.data.token,
-        isHost: response.data.isHost || false
-      }));
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem('photoBlenderSession', JSON.stringify({
+          roomCode: response.data.roomCode,
+          playerId: response.data.playerId,
+          playerName: finalPlayerName,
+          authToken: response.data.token,
+          isHost: response.data.isHost || false
+        }));
+      }
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to join room');
     } finally {
@@ -531,7 +541,9 @@ function App() {
 
   const resetGame = () => {
     // Clear session from localStorage
-    localStorage.removeItem('photoBlenderSession');
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('photoBlenderSession');
+    }
 
     // Clear URL
     window.history.pushState({}, '', '/');
@@ -585,6 +597,8 @@ function App() {
 
   // Rejoin with saved session
   const rejoinSession = () => {
+    if (typeof localStorage === 'undefined') return;
+
     const savedSession = localStorage.getItem('photoBlenderSession');
     if (savedSession) {
       try {
@@ -597,7 +611,9 @@ function App() {
         setSuccess('Reconnecting to room...');
       } catch (e) {
         setError('Failed to reconnect');
-        localStorage.removeItem('photoBlenderSession');
+        if (typeof localStorage !== 'undefined') {
+          localStorage.removeItem('photoBlenderSession');
+        }
       }
     }
   };
@@ -689,7 +705,7 @@ function App() {
         {currentView === 'home' && (
           <div>
             {/* Show rejoin button if session exists */}
-            {localStorage.getItem('photoBlenderSession') && (
+            {(typeof localStorage !== 'undefined' && localStorage.getItem('photoBlenderSession')) && (
               <div style={{ marginBottom: '20px', textAlign: 'center' }}>
                 <button
                   className="button button-primary"
