@@ -415,6 +415,8 @@ See `CRITICAL_SECURITY_FIXES.md` for full details. Summary:
 
 ### Environment Variables Checklist
 
+**✅ NOTE**: All environment variables are already configured on the Render deployment platform. No need to set them manually.
+
 **Required**:
 - `NODE_ENV=production`
 - `PORT=10000` (or Render's assigned port)

@@ -5,7 +5,6 @@ import DOMPurify from 'dompurify';
 import './index.css';
 import TutorialPopup from './TutorialPopup';
 import PrivacyPopup from './PrivacyPopup';
-import FloatingLeaderboard from './FloatingLeaderboard';
 import { sounds, haptics } from './utils/sounds';
 
 // Types
@@ -86,6 +85,9 @@ function App() {
   const [showPlayersList, setShowPlayersList] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showPrivacyPopup, setShowPrivacyPopup] = useState(false);
+  const [resultsCountdown, setResultsCountdown] = useState<number>(5);
+  const [previousScores, setPreviousScores] = useState<Map<string, number>>(new Map());
+  const [showConfetti, setShowConfetti] = useState(false);
 
   // Check URL for room code on mount
   useEffect(() => {
@@ -200,18 +202,33 @@ function App() {
       });
 
       newSocket.on('photoResults', (data: PhotoResults) => {
+        // Store previous scores before updating
+        if (data.leaderboard) {
+          const newPreviousScores = new Map<string, number>();
+          data.leaderboard.forEach(player => {
+            newPreviousScores.set(player.name, previousScores.get(player.name) || 0);
+          });
+          setPreviousScores(newPreviousScores);
+        }
+
         setPhotoResults(data);
+        setResultsCountdown(5); // Reset countdown
+
         // Play sound based on if current player got it right
         const myGuess = data.guesses.find(g => g.guesser === playerName);
         if (myGuess?.correct) {
           sounds.success();
           haptics.success();
+          setShowConfetti(true); // Show confetti for correct guess
+          setTimeout(() => setShowConfetti(false), 3000);
         } else if (myGuess) {
           sounds.error();
           haptics.error();
         }
+
         setTimeout(() => {
           setPhotoResults(null);
+          setResultsCountdown(5);
         }, 5000);
       });
 
@@ -270,6 +287,17 @@ function App() {
       return () => clearInterval(timer);
     }
   }, [currentPhoto, photoResults, timeRemaining]);
+
+  // Results countdown effect (5 seconds for photoResults display)
+  useEffect(() => {
+    if (photoResults && resultsCountdown > 0) {
+      const timer = setInterval(() => {
+        setResultsCountdown(prev => prev > 0 ? prev - 1 : 0);
+      }, 1000);
+
+      return () => clearInterval(timer);
+    }
+  }, [photoResults, resultsCountdown]);
 
   const createRoom = async () => {
     if (!playerName.trim()) {
@@ -1041,23 +1069,36 @@ function App() {
             )}
 
             {photoResults && (
-              <div style={{ textAlign: 'center' }}>
-                <h3 style={{
-                  fontSize: window.innerWidth <= 768 ? '1.2rem' : '1.5rem',
-                  marginBottom: window.innerWidth <= 768 ? '12px' : '20px'
-                }}>
-                  ✓ Correct: {photoResults.correctPlayer}
-                </h3>
+              <div className="combined-results-card">
+                {/* Confetti Effect */}
+                {showConfetti && (
+                  <div className="confetti-container">
+                    {Array.from({ length: 50 }).map((_, i) => (
+                      <div
+                        key={i}
+                        className="confetti"
+                        style={{
+                          left: `${Math.random() * 100}%`,
+                          animationDelay: `${Math.random() * 0.5}s`,
+                          backgroundColor: ['#ff6b6b', '#4ecdc4', '#45b7d1', '#f7b731', '#5f27cd', '#00d2d3'][Math.floor(Math.random() * 6)]
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
 
-                {/* Show who guessed what */}
-                <div style={{
-                  background: 'rgba(255, 255, 255, 0.08)',
-                  backdropFilter: 'blur(10px)',
-                  borderRadius: '20px',
-                  padding: window.innerWidth <= 768 ? '14px' : '20px',
-                  marginBottom: window.innerWidth <= 768 ? '16px' : '24px',
-                  border: '1px solid rgba(255, 255, 255, 0.15)'
-                }}>
+                {/* Section 1: Correct Answer Header */}
+                <div className="results-header">
+                  <h3 style={{
+                    fontSize: window.innerWidth <= 768 ? '1.2rem' : '1.5rem',
+                    marginBottom: '0'
+                  }}>
+                    ✓ Correct: {photoResults.correctPlayer}
+                  </h3>
+                </div>
+
+                {/* Section 2: Round Results (Who guessed what) */}
+                <div className="round-results-section">
                   <h4 style={{
                     marginBottom: window.innerWidth <= 768 ? '12px' : '16px',
                     fontSize: window.innerWidth <= 768 ? '1rem' : '1.1rem',
@@ -1100,14 +1141,86 @@ function App() {
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
 
-            {/* Floating Leaderboard during game */}
-            {photoResults && photoResults.leaderboard && (
-              <FloatingLeaderboard
-                players={photoResults.leaderboard}
-              />
+                {/* Section 3: Current Leaderboard */}
+                {photoResults.leaderboard && photoResults.leaderboard.length > 0 && (
+                  <div className="inline-leaderboard-section">
+                    <h4 style={{
+                      marginBottom: window.innerWidth <= 768 ? '12px' : '16px',
+                      fontSize: window.innerWidth <= 768 ? '1rem' : '1.1rem',
+                      opacity: 0.9,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px'
+                    }}>
+                      <span>🏆</span>
+                      <span>Current Standings</span>
+                    </h4>
+                    {photoResults.leaderboard.slice(0, 5).map((player, index) => {
+                      const isCurrentPlayer = player.name === playerName;
+                      const previousScore = previousScores.get(player.name) || 0;
+                      const scoreChange = player.score - previousScore;
+
+                      return (
+                        <div
+                          key={index}
+                          className={`inline-leaderboard-item ${isCurrentPlayer ? 'current-player' : ''}`}
+                          style={isCurrentPlayer ? {
+                            background: 'linear-gradient(135deg, rgba(147, 51, 234, 0.25) 0%, rgba(126, 34, 206, 0.2) 100%)',
+                            border: '2px solid rgba(147, 51, 234, 0.6)',
+                            boxShadow: '0 0 20px rgba(147, 51, 234, 0.4)',
+                          } : {}}
+                        >
+                          <span className="rank-indicator">
+                            {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `#${index + 1}`}
+                          </span>
+                          <span className="player-name-section">
+                            {player.name}
+                            {isCurrentPlayer && <span className="you-badge">YOU</span>}
+                            {player.streak && player.streak >= 3 && (
+                              <span className="streak-badge-inline">
+                                🔥 {player.streak}
+                              </span>
+                            )}
+                          </span>
+                          <span className="score-points-inline">
+                            <span className="score-number">{player.score}</span>
+                            {scoreChange > 0 && (
+                              <span className="score-change">+{scoreChange}</span>
+                            )}
+                            <span className="pts-label"> pts</span>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Section 4: Countdown Timer with Circular Progress */}
+                <div className="next-photo-timer-modern">
+                  <div className="countdown-circle">
+                    <svg className="countdown-svg" viewBox="0 0 100 100">
+                      <circle
+                        className="countdown-bg"
+                        cx="50"
+                        cy="50"
+                        r="45"
+                      />
+                      <circle
+                        className="countdown-progress"
+                        cx="50"
+                        cy="50"
+                        r="45"
+                        style={{
+                          strokeDashoffset: `${283 - (283 * resultsCountdown) / 5}`
+                        }}
+                      />
+                    </svg>
+                    <div className="countdown-number">{resultsCountdown}</div>
+                  </div>
+                  <div className="countdown-label">Next photo</div>
+                </div>
+              </div>
             )}
           </div>
         )}
